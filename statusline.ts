@@ -44,18 +44,23 @@ const main = async (): Promise<void> => {
     projectsDir: `${process.env.HOME}/.claude/projects`,
   };
 
-  // ccusage is launched first (it's the costliest step and the degrade target);
-  // capture the raw line so the catch handler can fall back to it.
+  // ccusage (the costliest step and the degrade target) and the transcript walk
+  // are independent, so launch both up front and let them run concurrently. We
+  // assign ccusageLine before awaiting entries so the catch handler can still
+  // fall back to the raw ccusage line. Each side .catch()es to a neutral value,
+  // so the awaits never reject; the outer try/catch only guards buildStatusline.
   let ccusageLine: string | null = null;
   try {
-    ccusageLine = await getCcusageLine(raw, 3000).catch(() => null);
-
-    const entries = await gatherEntries(
+    const ccusagePromise = getCcusageLine(raw, 3000).catch(() => null);
+    const entriesPromise = gatherEntries(
       config,
       input.transcript_path,
       input.session_id,
       now,
     ).catch(() => []);
+
+    ccusageLine = await ccusagePromise;
+    const entries = await entriesPromise;
 
     process.stdout.write(buildStatusline({ input, ccusageLine, entries, now, config }));
   } catch {
