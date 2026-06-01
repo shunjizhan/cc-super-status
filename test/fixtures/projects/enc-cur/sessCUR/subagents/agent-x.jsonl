@@ -1,1 +1,1 @@
-{"type":"assistant","timestamp":"2026-05-31T12:00:30.000Z","message":{"id":"msg_cur_C_subagent","usage":{"input_tokens":2000,"output_tokens":1000}}}
+{"type":"assistant","timestamp":"2026-05-31T12:00:30.000Z","message":{"id":"msg_cur_C_subagent","usage":{"input_tokens":2000,"output_tokens":1000,"cache_creation_input_tokens":1000,"cache_read_input_tokens":8000}}}

@@ -24,6 +24,8 @@ interface TranscriptLine {
     usage?: {
       input_tokens?: number;
       output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
     };
   };
 }
@@ -71,8 +73,18 @@ const readTail = async (path: string, tailBytes: number): Promise<string> => {
   return await file.slice(start).text();
 };
 
-/** Parse the assistant lines of one transcript's text into TokenEntry[]. */
-export const parseTranscriptText = (text: string, current: boolean): TokenEntry[] => {
+/**
+ * Parse the assistant lines of one transcript's text into TokenEntry[].
+ *
+ * `includeCache` controls whether cache tokens (cache_creation + cache_read)
+ * are counted on top of input + output. With it on (the default), each entry's
+ * `tok` matches ccusage's total-token definition.
+ */
+export const parseTranscriptText = (
+  text: string,
+  current: boolean,
+  includeCache: boolean,
+): TokenEntry[] => {
   const entries: TokenEntry[] = [];
 
   for (const raw of text.split('\n')) {
@@ -89,7 +101,10 @@ export const parseTranscriptText = (text: string, current: boolean): TokenEntry[
     const usage = parsed.message?.usage;
     if (usage === undefined) continue;
 
-    const tok = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+    let tok = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+    if (includeCache) {
+      tok += (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
+    }
     if (tok <= 0) continue;
 
     const tsRaw = parsed.timestamp;
@@ -148,7 +163,11 @@ export const gatherEntries = async (
         if (now - mtimeMs > config.lookbackMs) return [];
 
         const text = await readTail(path, config.tailBytes);
-        return parseTranscriptText(text, isCurrent(path, transcriptPath, sessionId));
+        return parseTranscriptText(
+          text,
+          isCurrent(path, transcriptPath, sessionId),
+          config.includeCache,
+        );
       } catch {
         return [];
       }

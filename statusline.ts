@@ -29,10 +29,15 @@ const main = async (): Promise<void> => {
     return Number.isFinite(n) && n > 0 ? n : fallback;
   };
 
+  // Boolean from env: unset → fallback; 0/false/no/off (any case) → false; else true.
+  const bool = (v: string | undefined, fallback: boolean): boolean =>
+    v === undefined ? fallback : !/^(0|false|no|off)$/i.test(v.trim());
+
   const windowSec = num(process.env.CCSS_WINDOW, 120);
   const config: Config = {
     quota: num(process.env.CCSS_QUOTA, 125),
     windowSec,
+    includeCache: bool(process.env.CCSS_CACHE, true),
     cells: 10,
     lookbackMs: windowSec * 1000 + 60_000,
     tailBytes: 1_048_576,

@@ -38,7 +38,8 @@ Keep the pure/impure split. Pure modules have unit tests; impure I/O is thin and
 
 - **Never throw, never print a stack trace.** stdout is the user's status line. `statusline.ts` wraps everything in try/catch and degrades to the raw ccusage line or `''`. Per-segment failures drop only that segment (model + ⭐️ always render; 🔥/💰/⚡ drop together if ccusage is unavailable).
 - **Token rate semantics** (don't change without asking — they were deliberately chosen, see the git history / the deep discussion that produced this repo):
-  - tokens = `input_tokens + output_tokens`; **dedup by `message.id`** (transcripts log each message 2–3× — counting all rows over-reports ~3×, which is the bug `ccstatusline`'s speed widget has).
+  - tokens, by default, = `input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens` — the same four components ccusage sums for its *total tokens*, so the ⭐️ rate's token amounts agree with ccusage. `CCSS_CACHE=0` (config `includeCache: false`) drops the two cache terms and counts only `input + output`. The include/exclude decision is made once at parse time in `parseTranscriptText`, baked into `TokenEntry.tok`; `rate.ts` never sees the split.
+  - **dedup by `message.id`** (transcripts log each message 2–3× — counting all rows over-reports ~3×, which is the bug `ccstatusline`'s speed widget has). Duplicate rows carry identical usage, so max-`tok` dedup is correct with or without cache.
   - window = last `CCSS_WINDOW` seconds (**÷ windowSec**, a true sliding average — not ÷ active-processing-time).
   - window ends at `max(now, latestTs)` so the rate **decays to 0 after the window of idle**.
   - `cur` = current session (its transcript + `<session_id>/subagents/`); `all` = every recent session. `all ≥ cur` always.

@@ -21,7 +21,12 @@ export interface StatuslineInput {
 export interface TokenEntry {
   /** message.id (fallback: the raw timestamp string) — the dedup key. */
   id: string;
-  /** input_tokens + output_tokens for the message. */
+  /**
+   * Token count for the message: input_tokens + output_tokens, plus
+   * cache_creation_input_tokens + cache_read_input_tokens when Config.includeCache
+   * is on (the default). With cache included this matches ccusage's total-token
+   * definition, so the ⭐️ rate's token amounts agree with what ccusage reports.
+   */
   tok: number;
   /** message timestamp, epoch milliseconds. */
   ts: number;
@@ -57,6 +62,12 @@ export interface Config {
   quota: number;
   /** rate sliding-window in seconds (env CCSS_WINDOW, default 120). */
   windowSec: number;
+  /**
+   * Count cache tokens (cache_creation + cache_read) in the ⭐️ rate, on top of
+   * input + output (env CCSS_CACHE, default true). On → consistent with ccusage's
+   * total-token definition; off → input + output only.
+   */
+  includeCache: boolean;
   /** quota bar width in cells (default 10). */
   cells: number;
   /** transcript mtime lookback in ms (default windowSec*1000 + 60_000 buffer). */

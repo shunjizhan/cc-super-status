@@ -22,11 +22,13 @@ Segments are joined by ` | ` in this fixed order. The three **ccusage-derived** 
 
 ### How the ⭐️ token rate works
 
-`cc-super-status` scans `~/.claude/projects` for transcripts modified recently, reads the tail of each, and extracts one token event per assistant message (`message.usage.input_tokens + output_tokens`). Events are:
+`cc-super-status` scans `~/.claude/projects` for transcripts modified recently, reads the tail of each, and extracts one token event per assistant message. By default each event counts **all four** token components — `input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens` — which matches how [ccusage](https://github.com/ryoppippi/ccusage) defines *total tokens*, so the throughput here is consistent with ccusage's totals. Set `CCSS_CACHE=0` to count only `input + output` instead. Events are:
 
 - **deduped** by `message.id` (handles transcripts that repeat a row),
 - **windowed** to the last `CCSS_WINDOW` seconds, and
 - divided by the window length and rounded to a per-second rate.
+
+Cache-read tokens dominate real usage (the cached context is re-read every turn), so the default cache-inclusive rate is typically far higher than the `input + output` figure.
 
 `cur` counts only the active session — its main transcript plus any subagent transcripts under `<session_id>/subagents/` — while `all` counts every session in the window. This is what lets you see total throughput across parallel Claude Code sessions.
 
@@ -44,6 +46,7 @@ Each source fails independently: if ccusage times out or transcripts can't be re
 | --- | --- | --- |
 | `CCSS_QUOTA` | `125` | Dollar quota per 5-hour block, used for the ⚡ `% left` bar. |
 | `CCSS_WINDOW` | `120` | Token-rate sliding window, in seconds. |
+| `CCSS_CACHE` | `true` | Include cache tokens (creation + read) in the ⭐️ rate, matching ccusage's total-token definition. Set to `0`/`false`/`no`/`off` to count only input + output. |
 
 Other constants (bar width `10` cells, transcript mtime lookback `CCSS_WINDOW + 60s`, `1 MiB` tail read per transcript, projects dir `$HOME/.claude/projects`) are fixed in `statusline.ts`.
 

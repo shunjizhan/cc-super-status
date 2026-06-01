@@ -13,18 +13,25 @@ import { quotaRgb, renderBar, truecolor } from '../src/format';
 // windowSec = 120 → windowMs = 120_000 → winStart = NOW - 120s = 2026-05-31T12:00:00Z.
 // Window is [12:00:00Z, 12:02:00Z] inclusive (end = max(now, maxTs) = now; no future ts).
 //
-// Fixtures under test/fixtures/projects/:
+// Fixtures under test/fixtures/projects/. Per-message tokens are
+//   input + output (+ cache_creation + cache_read when includeCache):
 //   enc-cur/sessCUR.jsonl                       (current session, main transcript)
-//     · msg_out_of_window  @ 11:59:00Z  100000 tok  → BEFORE winStart → EXCLUDED
-//     · msg_cur_A          @ 12:01:00Z    3000 tok  → in window, current  (×3 dup rows)
+//     · msg_out_of_window  @ 11:59:00Z  100000 tok (no cache) → BEFORE winStart → EXCLUDED
+//     · msg_cur_A          @ 12:01:00Z  in 2000 + out 1000 + cacheCreate 1000 + cacheRead 8000
+//                                       → 3000 no-cache / 12000 with cache  (current, ×3 dup rows)
 //   enc-cur/sessCUR/subagents/agent-x.jsonl     (current session, subagent)
-//     · msg_cur_C_subagent @ 12:00:30Z    3000 tok  → in window, current
+//     · msg_cur_C_subagent @ 12:00:30Z  same shape → 3000 no-cache / 12000 with cache  (current)
 //   enc-other/sessOTHER.jsonl                   (a DIFFERENT session)
-//     · msg_other_D        @ 12:01:30Z    6000 tok  → in window, NON-current
+//     · msg_other_D        @ 12:01:30Z  in 4000 + out 2000 + cacheCreate 2000 + cacheRead 10000
+//                                       → 6000 no-cache / 18000 with cache  (NON-current)
 //
-// Rate arithmetic (windowSec = 120):
-//   cur sum = A(3000) + C(3000)            = 6000  →  6000 / 120  = 50  t/s
-//   all sum = A(3000) + C(3000) + D(6000)  = 12000 → 12000 / 120  = 100 t/s
+// Rate arithmetic (windowSec = 120), cache INCLUDED (the default):
+//   cur sum = A(12000) + C(12000)             = 24000 → 24000 / 120 = 200 t/s
+//   all sum = A(12000) + C(12000) + D(18000)  = 42000 → 42000 / 120 = 350 t/s
+//
+// Rate arithmetic with cache EXCLUDED (input + output only):
+//   cur sum = A(3000) + C(3000)               =  6000 →  6000 / 120 =  50 t/s
+//   all sum = A(3000) + C(3000) + D(6000)     = 12000 → 12000 / 120 = 100 t/s
 //   (the triplicated A counts once via dedup; the 100000-tok B is out of window)
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -37,6 +44,7 @@ const CUR_TRANSCRIPT = `${PROJECTS_DIR}/enc-cur/sessCUR.jsonl`;
 const config: Config = {
   quota: 125,
   windowSec: 120,
+  includeCache: true,
   cells: 10,
   lookbackMs: 120 * 1000 + 60_000,
   tailBytes: 1_048_576,
@@ -44,9 +52,16 @@ const config: Config = {
 };
 
 describe('e2e: gatherEntries + computeRate', () => {
-  test('cur from current main+subagent in window; all includes other session; dedup; out-of-window excluded', async () => {
+  test('cache included (default): cur from current main+subagent; all adds other session; dedup; out-of-window excluded', async () => {
     const entries = await gatherEntries(config, CUR_TRANSCRIPT, 'sessCUR', NOW);
     const rates = computeRate(entries, NOW, config.windowSec * 1000);
+    expect(rates).toEqual({ cur: 200, all: 350 });
+  });
+
+  test('cache excluded: only input + output counted', async () => {
+    const noCache: Config = { ...config, includeCache: false };
+    const entries = await gatherEntries(noCache, CUR_TRANSCRIPT, 'sessCUR', NOW);
+    const rates = computeRate(entries, NOW, noCache.windowSec * 1000);
     expect(rates).toEqual({ cur: 50, all: 100 });
   });
 });
@@ -74,7 +89,7 @@ describe('e2e: buildStatusline full render', () => {
     const expected =
       '🤖 Opus 4.8-1m (ultracode)' +
       ' | 🔥 $13.18/hr' +
-      ' | ⭐️ {50}100t/s' +
+      ' | ⭐️ {200}350t/s' +
       ' | 💰 $13.5 / $31 / $330' +
       ` | ⚡ 2h 35m, ${quotaColored}`;
 
