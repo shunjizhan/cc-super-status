@@ -1,0 +1,14 @@
+{
+  "name": "cc-super-status",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude Code status line: model+effort, burn rate, cross-session token rate, cost, quota bar.",
+  "scripts": {
+    "test": "bun test",
+    "statusline": "bun run statusline.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

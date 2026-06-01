@@ -1,0 +1,4 @@
+{"type":"assistant","timestamp":"2026-05-31T11:59:00.000Z","message":{"id":"msg_out_of_window","usage":{"input_tokens":50000,"output_tokens":50000}}}
+{"type":"assistant","timestamp":"2026-05-31T12:01:00.000Z","message":{"id":"msg_cur_A","usage":{"input_tokens":2000,"output_tokens":1000}}}
+{"type":"assistant","timestamp":"2026-05-31T12:01:00.000Z","message":{"id":"msg_cur_A","usage":{"input_tokens":2000,"output_tokens":1000}}}
+{"type":"assistant","timestamp":"2026-05-31T12:01:00.000Z","message":{"id":"msg_cur_A","usage":{"input_tokens":2000,"output_tokens":1000}}}
