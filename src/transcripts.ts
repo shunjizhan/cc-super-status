@@ -15,20 +15,55 @@ import { readdir, stat } from 'node:fs/promises';
 
 import type { Config, TokenEntry } from './types';
 
+/** The token usage block of one assistant message (everything optional/loose). */
+interface Usage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
 /** Shape of the transcript JSONL lines we care about (everything optional/loose). */
 interface TranscriptLine {
   type?: string;
   timestamp?: string;
   message?: {
     id?: string;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
-    };
+    usage?: Usage;
   };
 }
+
+/** Charge-rate multipliers relative to base input price (Anthropic pricing ratios). */
+const CHARGE = { output: 5, cacheWrite: 2, cacheRead: 0.1 } as const;
+
+/** How a message's token count is computed — both flags come from Config. */
+interface TokOpts {
+  includeCache: boolean;
+  effectiveRate: boolean;
+}
+
+/**
+ * Weighted token count for one message's usage.
+ *
+ * Raw (effectiveRate off): input + output, plus cache_creation + cache_read when
+ * includeCache — every component counts as 1, matching ccusage's total tokens.
+ * Effective (on, the default): each component is scaled by its Anthropic charge
+ * ratio vs base input price — output ×5, cache write ×2 (all treated as 1-hour),
+ * cache read ×0.1, input ×1 — so the rate reflects cost-equivalent ("charge")
+ * tokens. The result may be fractional; rate.ts sums then rounds.
+ */
+export const tokenCount = (usage: Usage, { includeCache, effectiveRate }: TokOpts): number => {
+  const input = usage.input_tokens ?? 0;
+  const output = usage.output_tokens ?? 0;
+  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+  const cacheRead = usage.cache_read_input_tokens ?? 0;
+
+  if (effectiveRate) {
+    const cache = includeCache ? cacheWrite * CHARGE.cacheWrite + cacheRead * CHARGE.cacheRead : 0;
+    return input + output * CHARGE.output + cache;
+  }
+  return input + output + (includeCache ? cacheWrite + cacheRead : 0);
+};
 
 /** Join path segments with '/', collapsing duplicate separators. */
 const join = (...parts: string[]): string =>
@@ -76,14 +111,14 @@ const readTail = async (path: string, tailBytes: number): Promise<string> => {
 /**
  * Parse the assistant lines of one transcript's text into TokenEntry[].
  *
- * `includeCache` controls whether cache tokens (cache_creation + cache_read)
- * are counted on top of input + output. With it on (the default), each entry's
- * `tok` matches ccusage's total-token definition.
+ * `opts` (includeCache + effectiveRate) is forwarded to `tokenCount`, which bakes
+ * the per-component weighting into each entry's `tok`. Downstream — dedup,
+ * windowing, the per-second divide — never sees the split.
  */
 export const parseTranscriptText = (
   text: string,
   current: boolean,
-  includeCache: boolean,
+  opts: TokOpts,
 ): TokenEntry[] => {
   const entries: TokenEntry[] = [];
 
@@ -101,10 +136,7 @@ export const parseTranscriptText = (
     const usage = parsed.message?.usage;
     if (usage === undefined) continue;
 
-    let tok = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
-    if (includeCache) {
-      tok += (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
-    }
+    const tok = tokenCount(usage, opts);
     if (tok <= 0) continue;
 
     const tsRaw = parsed.timestamp;
@@ -163,11 +195,10 @@ export const gatherEntries = async (
         if (now - mtimeMs > config.lookbackMs) return [];
 
         const text = await readTail(path, config.tailBytes);
-        return parseTranscriptText(
-          text,
-          isCurrent(path, transcriptPath, sessionId),
-          config.includeCache,
-        );
+        return parseTranscriptText(text, isCurrent(path, transcriptPath, sessionId), {
+          includeCache: config.includeCache,
+          effectiveRate: config.effectiveRate,
+        });
       } catch {
         return [];
       }

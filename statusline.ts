@@ -38,6 +38,7 @@ const main = async (): Promise<void> => {
     quota: num(process.env.CCSS_QUOTA, 125),
     windowSec,
     includeCache: bool(process.env.CCSS_CACHE, true),
+    effectiveRate: bool(process.env.CCSS_EFFECTIVE, true),
     cells: 10,
     lookbackMs: windowSec * 1000 + 60_000,
     tailBytes: 1_048_576,

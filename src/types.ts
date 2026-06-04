@@ -22,10 +22,16 @@ export interface TokenEntry {
   /** message.id (fallback: the raw timestamp string) — the dedup key. */
   id: string;
   /**
-   * Token count for the message: input_tokens + output_tokens, plus
-   * cache_creation_input_tokens + cache_read_input_tokens when Config.includeCache
-   * is on (the default). With cache included this matches ccusage's total-token
-   * definition, so the ⭐️ rate's token amounts agree with what ccusage reports.
+   * Weighted token count for the message. The components summed are
+   * input_tokens + output_tokens, plus cache_creation_input_tokens +
+   * cache_read_input_tokens when Config.includeCache is on (the default).
+   *
+   * When Config.effectiveRate is on (the default), each component is scaled by its
+   * Anthropic charge ratio relative to base input price — output ×5, cache write ×2
+   * (all treated as 1-hour), cache read ×0.1, input ×1 — so the ⭐️ rate reflects
+   * cost-equivalent ("charge") tokens and the value may be fractional. When off,
+   * every weight is 1 and (with cache included) `tok` matches ccusage's total-token
+   * definition, so the 🌟 rate's amounts agree with what ccusage reports.
    */
   tok: number;
   /** message timestamp, epoch milliseconds. */
@@ -64,10 +70,17 @@ export interface Config {
   windowSec: number;
   /**
    * Count cache tokens (cache_creation + cache_read) in the ⭐️ rate, on top of
-   * input + output (env CCSS_CACHE, default true). On → consistent with ccusage's
-   * total-token definition; off → input + output only.
+   * input + output (env CCSS_CACHE, default true). Off → input + output only. On
+   * with effectiveRate off → consistent with ccusage's total-token definition.
    */
   includeCache: boolean;
+  /**
+   * Weight the rate by Anthropic charge ratios instead of counting raw tokens
+   * (env CCSS_EFFECTIVE, default true). On → output ×5, cache write ×2, cache read
+   * ×0.1, input ×1, so the rate tracks cost-equivalent tokens (shown with ⭐️).
+   * Off → every token counts as 1, i.e. raw throughput (shown with 🌟).
+   */
+  effectiveRate: boolean;
   /** quota bar width in cells (default 10). */
   cells: number;
   /** transcript mtime lookback in ms (default windowSec*1000 + 60_000 buffer). */

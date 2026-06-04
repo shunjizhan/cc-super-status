@@ -42,8 +42,10 @@ export const buildStatusline = (args: BuildArgs): string => {
   // b. 🔥 burn rate.
   if (cc) segments.push(`🔥 ${cc.burn}`);
 
-  // c. ⭐️ token rate — always present.
-  segments.push(formatSpeed(computeRate(entries, now, config.windowSec * 1000)));
+  // c. ⭐️/🌟 token rate — always present.
+  segments.push(
+    formatSpeed(computeRate(entries, now, config.windowSec * 1000), config.effectiveRate),
+  );
 
   // d. 💰 session / block / today.
   if (cc) {

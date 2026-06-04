@@ -16,19 +16,32 @@ Segments are joined by ` | ` in this fixed order. The three **ccusage-derived** 
 | --- | --- | --- |
 | 🤖 `Opus 4.8-1m (ultracode)` | Model + reasoning effort. `(1M context)` collapses to `-1m`; effort `xhigh` renders as `ultracode`, other levels pass through, absent effort is omitted. | stdin JSON (`model`, `effort`) |
 | 🔥 `$13.18/hr` | Current dollar **burn rate**, verbatim from ccusage. | `ccusage statusline` |
-| ⭐️ `{50}300t/s` | **Token throughput** over the sliding window. `{cur}all` — `cur` = current session (this transcript + its subagents), `all` = every recent session. Collapses to a single `Nt/s` when `cur === all`. | transcripts on disk |
+| ⭐️ `{50}300t/s` | **Token throughput** over the sliding window, charge-weighted by default (⭐️; raw mode shows 🌟 — see below). `{cur}all` — `cur` = current session (this transcript + its subagents), `all` = every recent session. Collapses to a single `Nt/s` when `cur === all`. | transcripts on disk |
 | 💰 `$13.5 / $31 / $330` | Cost: **session / block / today** (session to 1 decimal, block and today rounded). | `ccusage statusline` |
 | ⚡ `2h 35m, 75% left ▰▰▰▰▰▰▰▱▱▱` | Time left in the current 5-hour block, then `% left` of your quota with a colored bar. Color: red `< 20%`, amber `< 50%`, green otherwise. | `ccusage statusline` + `CCSS_QUOTA` |
 
 ### How the ⭐️ token rate works
 
-`cc-super-status` scans `~/.claude/projects` for transcripts modified recently, reads the tail of each, and extracts one token event per assistant message. By default each event counts **all four** token components — `input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens` — which matches how [ccusage](https://github.com/ryoppippi/ccusage) defines *total tokens*, so the throughput here is consistent with ccusage's totals. Set `CCSS_CACHE=0` to count only `input + output` instead. Events are:
+`cc-super-status` scans `~/.claude/projects` for transcripts modified recently, reads the tail of each, and extracts one token event per assistant message. Events are:
 
 - **deduped** by `message.id` (handles transcripts that repeat a row),
 - **windowed** to the last `CCSS_WINDOW` seconds, and
 - divided by the window length and rounded to a per-second rate.
 
-Cache-read tokens dominate real usage (the cached context is re-read every turn), so the default cache-inclusive rate is typically far higher than the `input + output` figure.
+**Effective (charge-weighted) rate — the default (⭐️).** Raw token counts are misleading because cache-read tokens dominate real usage (the cached context is re-read every turn) yet cost only a tenth of a base input token. So by default each component is weighted by its [Anthropic price ratio](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#pricing) relative to base **input (1×)**:
+
+| Component | Weight |
+| --- | --- |
+| `input_tokens` | 1× |
+| `output_tokens` | 5× |
+| `cache_creation_input_tokens` | 2× (all treated as 1-hour writes) |
+| `cache_read_input_tokens` | 0.1× |
+
+The result is a **cost-equivalent** throughput — "input-token-equivalents per second" — that tracks how fast you're actually burning money rather than raw token volume.
+
+**Raw rate (🌟).** Set `CCSS_EFFECTIVE=0` to weight every component at 1× instead: `input + output + cache_creation + cache_read`. This matches how [ccusage](https://github.com/ryoppippi/ccusage) defines *total tokens*, so the throughput agrees with ccusage's totals. Raw mode renders with **🌟** so you can tell the two modes apart at a glance.
+
+In either mode, `CCSS_CACHE=0` drops the two cache terms entirely (counting only `input + output`, weighted per the active mode).
 
 `cur` counts only the active session — its main transcript plus any subagent transcripts under `<session_id>/subagents/` — while `all` counts every session in the window. This is what lets you see total throughput across parallel Claude Code sessions.
 
@@ -46,7 +59,8 @@ Each source fails independently: if ccusage times out or transcripts can't be re
 | --- | --- | --- |
 | `CCSS_QUOTA` | `125` | Dollar quota per 5-hour block, used for the ⚡ `% left` bar. |
 | `CCSS_WINDOW` | `120` | Token-rate sliding window, in seconds. |
-| `CCSS_CACHE` | `true` | Include cache tokens (creation + read) in the ⭐️ rate, matching ccusage's total-token definition. Set to `0`/`false`/`no`/`off` to count only input + output. |
+| `CCSS_EFFECTIVE` | `true` | Charge-weight the token rate (output ×5, cache write ×2, cache read ×0.1, input ×1) so it tracks cost-equivalent tokens, shown with ⭐️. Set to `0`/`false`/`no`/`off` for raw 1×-per-token throughput, shown with 🌟. |
+| `CCSS_CACHE` | `true` | Include cache tokens (creation + read) in the rate. Set to `0`/`false`/`no`/`off` to count only input + output. With `CCSS_EFFECTIVE=0` and `CCSS_CACHE=1` the raw rate matches ccusage's total-token definition. |
 
 Other constants (bar width `10` cells, transcript mtime lookback `CCSS_WINDOW + 60s`, `1 MiB` tail read per transcript, projects dir `$HOME/.claude/projects`) are fixed in `statusline.ts`.
 

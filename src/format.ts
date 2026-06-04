@@ -21,9 +21,16 @@ export const formatModel = (
   return `🤖 ${name}` + (effort ? ` (${effort})` : '');
 };
 
-/** Render the ⭐️ token-rate segment, collapsing when cur === all. */
-export const formatSpeed = (rates: Rates): string =>
-  rates.cur === rates.all ? `⭐️ ${rates.all}t/s` : `⭐️ {${rates.cur}}${rates.all}t/s`;
+/**
+ * Render the token-rate segment, collapsing when cur === all.
+ * Star marks the mode: ⭐️ when charge-weighted (effective), 🌟 when raw.
+ */
+export const formatSpeed = (rates: Rates, effectiveRate: boolean): string => {
+  const star = effectiveRate ? '⭐️' : '🌟';
+  return rates.cur === rates.all
+    ? `${star} ${rates.all}t/s`
+    : `${star} {${rates.cur}}${rates.all}t/s`;
+};
 
 /** Render a progress bar of `cells` width filled proportionally to `pct` (0–100). */
 export const renderBar = (pct: number, cells: number): string => {

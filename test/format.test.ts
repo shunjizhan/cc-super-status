@@ -39,15 +39,20 @@ describe('formatModel', () => {
 
 describe('formatSpeed', () => {
   test('collapses to single value when cur === all (idle 0/0)', () => {
-    expect(formatSpeed({ cur: 0, all: 0 })).toBe('⭐️ 0t/s');
+    expect(formatSpeed({ cur: 0, all: 0 }, true)).toBe('⭐️ 0t/s');
   });
 
   test('collapses when cur === all (5/5)', () => {
-    expect(formatSpeed({ cur: 5, all: 5 })).toBe('⭐️ 5t/s');
+    expect(formatSpeed({ cur: 5, all: 5 }, true)).toBe('⭐️ 5t/s');
   });
 
   test('uses braces when cur !== all', () => {
-    expect(formatSpeed({ cur: 50, all: 300 })).toBe('⭐️ {50}300t/s');
+    expect(formatSpeed({ cur: 50, all: 300 }, true)).toBe('⭐️ {50}300t/s');
+  });
+
+  test('raw mode (effectiveRate=false) uses 🌟 instead of ⭐️', () => {
+    expect(formatSpeed({ cur: 0, all: 0 }, false)).toBe('🌟 0t/s');
+    expect(formatSpeed({ cur: 50, all: 300 }, false)).toBe('🌟 {50}300t/s');
   });
 });
 
