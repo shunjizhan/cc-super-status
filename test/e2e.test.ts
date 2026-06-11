@@ -126,6 +126,67 @@ describe('e2e: buildStatusline full render', () => {
   });
 });
 
+describe('e2e: buildStatusline with first-party rate limits', () => {
+  // Claude Code ≥2.1.132 (Pro/Max) passes rate_limits on stdin; resets_at is epoch SECONDS.
+  // five_hour: used 40% → 60% left; resets in 1h 5m — both intentionally different from
+  // the canned ccusage block (75% / 2h 35m) to prove the first-party data wins.
+  const input: StatuslineInput = {
+    model: { display_name: 'Fable 5', id: 'claude-fable-5' },
+    effort: { level: 'xhigh' },
+    transcript_path: CUR_TRANSCRIPT,
+    session_id: 'sessCUR',
+    rate_limits: {
+      five_hour: { used_percentage: 40, resets_at: NOW / 1000 + 3600 + 5 * 60 },
+      seven_day: { used_percentage: 80, resets_at: NOW / 1000 + 86_400 },
+    },
+  };
+
+  const ccusageLine =
+    '🤖 Fable 5 | 💰 $13.50 session / $330.00 today / $31.25 block (2h 35m left) | 🔥 $13.18/hr | 🧠 1,000 (2%)';
+
+  const rlColored = truecolor(`60% left ${renderBar(60, 10)}`, quotaRgb(60));
+  // ccusage fallback: block=31.25 of quota 125 → 75% left.
+  const ccColored = truecolor(`75% left ${renderBar(75, 10)}`, quotaRgb(75));
+
+  test('⚡ uses five_hour rate limit, not the ccusage $ estimate', async () => {
+    const entries = await gatherEntries(config, CUR_TRANSCRIPT, 'sessCUR', NOW);
+    const actual = buildStatusline({ input, ccusageLine, entries, now: NOW, config });
+    const expected =
+      '🤖 Fable 5 (ultracode)' +
+      ' | 🔥 $13.18/hr' +
+      ' | ⭐️ {163}322t/s' +
+      ' | 💰 $13.5 / $31 / $330' +
+      ` | ⚡ 1h 5m, ${rlColored}`;
+    expect(actual).toBe(expected);
+  });
+
+  test('⚡ renders from rate_limits even when ccusage is unavailable', async () => {
+    const entries = await gatherEntries(config, CUR_TRANSCRIPT, 'sessCUR', NOW);
+    const actual = buildStatusline({ input, ccusageLine: null, entries, now: NOW, config });
+    expect(actual).toBe(`🤖 Fable 5 (ultracode) | ⭐️ {163}322t/s | ⚡ 1h 5m, ${rlColored}`);
+  });
+
+  test('null rate-limit fields (boundary junk) → falls back to the ccusage $ estimate', async () => {
+    const nullFields = {
+      ...input,
+      rate_limits: { five_hour: { used_percentage: null, resets_at: null } },
+    } as unknown as StatuslineInput;
+    const entries = await gatherEntries(config, CUR_TRANSCRIPT, 'sessCUR', NOW);
+    const actual = buildStatusline({ input: nullFields, ccusageLine, entries, now: NOW, config });
+    expect(actual).toContain(`⚡ 2h 35m, ${ccColored}`);
+  });
+
+  test('five_hour window absent → falls back to the ccusage $ estimate', async () => {
+    const noFiveHour: StatuslineInput = {
+      ...input,
+      rate_limits: { seven_day: { used_percentage: 80, resets_at: NOW / 1000 + 86_400 } },
+    };
+    const entries = await gatherEntries(config, CUR_TRANSCRIPT, 'sessCUR', NOW);
+    const actual = buildStatusline({ input: noFiveHour, ccusageLine, entries, now: NOW, config });
+    expect(actual).toContain(`⚡ 2h 35m, ${ccColored}`);
+  });
+});
+
 describe('e2e: idle', () => {
   test('10 minutes past last activity → {cur:0, all:0} and "⭐️ 0t/s"', async () => {
     const idleNow = NOW + 10 * 60 * 1000;

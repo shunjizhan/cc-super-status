@@ -46,10 +46,40 @@ export const quotaRgb = (pct: number): [number, number, number] =>
 export const truecolor = (text: string, rgb: [number, number, number]): string =>
   `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m${text}\x1b[0m`;
 
-/** Render the ⚡ quota segment: time left + colored "<pct>% left <bar>". */
-export const formatQuota = (timeLeft: string, blockCost: number, quota: number, cells: number): string => {
-  const pct = clamp(Math.round(((quota - blockCost) / quota) * 100), 0, 100);
+/** Shared ⚡ tail: time left + colored "<pct>% left <bar>". */
+const renderQuota = (timeLeft: string, pct: number, cells: number): string => {
   const bar = renderBar(pct, cells);
   const colored = truecolor(`${pct}% left ${bar}`, quotaRgb(pct));
   return `⚡ ${timeLeft}, ${colored}`;
+};
+
+/** Render the ⚡ quota segment from the ccusage $ estimate: (quota - block) / quota. */
+export const formatQuota = (timeLeft: string, blockCost: number, quota: number, cells: number): string => {
+  const pct = clamp(Math.round(((quota - blockCost) / quota) * 100), 0, 100);
+  return renderQuota(timeLeft, pct, cells);
+};
+
+/**
+ * Format a duration as "2h 35m" / "45m" (floor to the minute, ccusage style).
+ * Zero or negative durations clamp to "0m".
+ */
+export const formatResetDuration = (ms: number): string => {
+  const totalMin = Math.max(0, Math.floor(ms / 60_000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+};
+
+/**
+ * Render the ⚡ quota segment from Claude Code's first-party rate-limit window:
+ * pct left = 100 - used_percentage (clamped), time = resets_at (epoch seconds) - now.
+ */
+export const formatRateLimitQuota = (
+  usedPercentage: number,
+  resetsAtSec: number,
+  now: number,
+  cells: number,
+): string => {
+  const pct = clamp(Math.round(100 - usedPercentage), 0, 100);
+  return renderQuota(formatResetDuration(resetsAtSec * 1000 - now), pct, cells);
 };

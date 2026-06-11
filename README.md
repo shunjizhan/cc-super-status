@@ -10,7 +10,7 @@ Runs on [Bun](https://bun.sh) (no build step — `bun run` executes the TypeScri
 
 ## The segments
 
-Segments are joined by ` | ` in this fixed order. The three **ccusage-derived** segments (🔥 / 💰 / ⚡) are omitted together if `ccusage` isn't available or its output can't be parsed, so the 🤖 and ⭐️ segments always render.
+Segments are joined by ` | ` in this fixed order. The two **ccusage-derived** segments (🔥 / 💰) are omitted together if `ccusage` isn't available or its output can't be parsed, so the 🤖 and ⭐️ segments always render. ⚡ prefers Claude Code's own rate-limit data from stdin (independent of ccusage) and only falls back to the ccusage estimate when that data is absent.
 
 | Segment | Meaning | Source |
 | --- | --- | --- |
@@ -18,7 +18,7 @@ Segments are joined by ` | ` in this fixed order. The three **ccusage-derived** 
 | 🔥 `$13.18/hr` | Current dollar **burn rate**, verbatim from ccusage. | `ccusage statusline` |
 | ⭐️ `{50}300t/s` | **Token throughput** over the sliding window, charge-weighted by default (⭐️; raw mode shows 🌟 — see below). `{cur}all` — `cur` = current session (this transcript + its subagents), `all` = every recent session. Collapses to a single `Nt/s` when `cur === all`. | transcripts on disk |
 | 💰 `$13.5 / $31 / $330` | Cost: **session / block / today** (session to 1 decimal, block and today rounded). | `ccusage statusline` |
-| ⚡ `2h 35m, 75% left ▰▰▰▰▰▰▰▱▱▱` | Time left in the current 5-hour block, then `% left` of your quota with a colored bar. Color: red `< 20%`, amber `< 50%`, green otherwise. | `ccusage statusline` + `CCSS_QUOTA` |
+| ⚡ `2h 35m, 75% left ▰▰▰▰▰▰▰▱▱▱` | **Session remaining.** Time until the current 5-hour rate-limit window resets, then `% left` with a colored bar. Color: red `< 20%`, amber `< 50%`, green otherwise. Uses Claude Code's first-party `rate_limits.five_hour` (`used_percentage` + `resets_at`, passed on stdin for Pro/Max subscribers since CC 2.1.132) — the official numbers, same as `/usage`. Falls back to the old ccusage `$`-quota estimate (`(CCSS_QUOTA − block) / CCSS_QUOTA`) when that data is absent (e.g. API-key billing). | stdin JSON `rate_limits`, else `ccusage statusline` + `CCSS_QUOTA` |
 
 ### How the ⭐️ token rate works
 
@@ -47,9 +47,11 @@ In either mode, `CCSS_CACHE=0` drops the two cache terms entirely (counting only
 
 ## Data sources
 
-- **stdin JSON** — Claude Code pipes a JSON blob to the status line command on every render (`model`, `effort`, `session_id`, `transcript_path`, `cwd`). Drives the 🤖 segment.
-- **`ccusage statusline`** — the [ccusage](https://github.com/ryoppippi/ccusage) CLI. Resolved fastest-first: a `ccusage` on `PATH`, else bun's global bin (`~/.bun/bin/ccusage`, where `bun install -g ccusage` lands even when that dir isn't on `PATH`), else `bunx ccusage`. Drives 🔥 / 💰 / ⚡. Capped at a 3s timeout; any failure simply drops those segments.
+- **stdin JSON** — Claude Code pipes a JSON blob to the status line command on every render (`model`, `effort`, `session_id`, `transcript_path`, `cwd`, `rate_limits`). Drives the 🤖 segment and (when `rate_limits` is present) the ⚡ segment.
+- **`ccusage statusline`** — the [ccusage](https://github.com/ryoppippi/ccusage) CLI. Resolved fastest-first: a `ccusage` on `PATH`, else bun's global bin (`~/.bun/bin/ccusage`, where `bun install -g ccusage` lands even when that dir isn't on `PATH`), else `bunx ccusage`. Drives 🔥 / 💰 (and the ⚡ fallback). Capped at a 3s timeout; any failure simply drops those segments.
 - **Transcripts on disk** — JSONL files under `~/.claude/projects`. Drives the ⭐️ segment.
+
+> **Keep ccusage updated when a new model ships.** `ccusage statusline` runs in offline mode by default, pricing tokens from a snapshot **bundled with the installed version**. A ccusage installed before a model's launch (e.g. ccusage 20.0.6 vs Claude Fable 5) silently prices that model's tokens at **$0**, so 🔥 and 💰 (and the ⚡ fallback) under-report. Fix: `bun install -g ccusage@latest`.
 
 Each source fails independently: if ccusage times out or transcripts can't be read, the rest of the line still renders. The process **never throws** — on a total failure it emits the raw ccusage line if it has one, otherwise an empty string.
 
@@ -57,7 +59,7 @@ Each source fails independently: if ccusage times out or transcripts can't be re
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CCSS_QUOTA` | `125` | Dollar quota per 5-hour block, used for the ⚡ `% left` bar. |
+| `CCSS_QUOTA` | `125` | Dollar quota per 5-hour block, used for the ⚡ `% left` bar **only in the ccusage fallback path** (ignored when Claude Code passes the five-hour rate-limit window on stdin). |
 | `CCSS_WINDOW` | `120` | Token-rate sliding window, in seconds. |
 | `CCSS_EFFECTIVE` | `true` | Charge-weight the token rate (output ×5, cache write ×2, cache read ×0.1, input ×1) so it tracks cost-equivalent tokens, shown with ⭐️. Set to `0`/`false`/`no`/`off` for raw 1×-per-token throughput, shown with 🌟. |
 | `CCSS_CACHE` | `true` | Include cache tokens (creation + read) in the rate. Set to `0`/`false`/`no`/`off` to count only input + output. With `CCSS_EFFECTIVE=0` and `CCSS_CACHE=1` the raw rate matches ccusage's total-token definition. |

@@ -5,8 +5,21 @@
 //
 // Segment data sources are independent (so each can fail/degrade alone):
 //   - 🤖 model + effort  ← stdin JSON (StatuslineInput)
-//   - 🔥 / 💰 / ⚡        ← `ccusage statusline` output (CcusageData)
+//   - 🔥 / 💰             ← `ccusage statusline` output (CcusageData)
+//   - ⚡ quota            ← stdin `rate_limits` (RateLimitWindow), ccusage $ estimate as fallback
 //   - ⭐️ token rates     ← transcripts on disk (TokenEntry[] → Rates)
+
+/**
+ * One first-party rate-limit window from Claude Code's stdin data
+ * (`rate_limits.five_hour` / `.seven_day`, present for Claude.ai Pro/Max
+ * subscribers on Claude Code ≥2.1.132, after the first API response).
+ */
+export interface RateLimitWindow {
+  /** 0–100, may be fractional. */
+  used_percentage?: number;
+  /** When the window resets — Unix epoch SECONDS (not ms). */
+  resets_at?: number;
+}
 
 /** Statusline JSON Claude Code passes on stdin (only the fields we use). */
 export interface StatuslineInput {
@@ -15,6 +28,8 @@ export interface StatuslineInput {
   session_id?: string;
   transcript_path?: string;
   cwd?: string;
+  /** Each window may be independently absent; the whole object absent for API-key users. */
+  rate_limits?: { five_hour?: RateLimitWindow; seven_day?: RateLimitWindow };
 }
 
 /** One deduped token event from a transcript line (a single assistant message). */

@@ -6,7 +6,7 @@
 
 import type { Config, StatuslineInput, TokenEntry } from './types';
 import { parseCcusage } from './ccusage';
-import { formatModel, formatQuota, formatSpeed } from './format';
+import { formatModel, formatQuota, formatRateLimitQuota, formatSpeed } from './format';
 import { computeRate } from './rate';
 
 interface BuildArgs {
@@ -23,11 +23,12 @@ interface BuildArgs {
  *   b. 🔥 burn                              (ccusage-derived; omitted if parse fails)
  *   c. ⭐️ token rate                         (always present)
  *   d. 💰 session / block / today            (ccusage-derived)
- *   e. ⚡ quota: time left + colored bar     (ccusage-derived)
+ *   e. ⚡ quota: time left + colored bar     (stdin rate_limits, ccusage fallback)
  *
- * The three ccusage-derived segments are all omitted together when the
- * ccusage line is missing or unparseable, so the model + speed segments
- * still render on their own.
+ * The two ccusage-derived segments (🔥/💰) are omitted together when the
+ * ccusage line is missing or unparseable; ⚡ renders from stdin rate_limits
+ * independently of ccusage and drops only when both sources are absent.
+ * The model + speed segments always render on their own.
  */
 export const buildStatusline = (args: BuildArgs): string => {
   const { input, ccusageLine, entries, now, config } = args;
@@ -54,9 +55,21 @@ export const buildStatusline = (args: BuildArgs): string => {
     );
   }
 
-  // e. ⚡ quota. Use the same rounded block that the 💰 segment displays, so the
-  // "% left" always agrees with the dollar amount shown (and with the old script).
-  if (cc) segments.push(formatQuota(cc.timeLeft, Math.round(cc.block), config.quota, config.cells));
+  // e. ⚡ quota. Prefer Claude Code's first-party five-hour rate-limit window
+  // (authoritative — present for Pro/Max subscribers since CC 2.1.132), so the
+  // segment renders even without ccusage. Fall back to the ccusage $ estimate,
+  // using the same rounded block that the 💰 segment displays, so the "% left"
+  // always agrees with the dollar amount shown (and with the old script).
+  // typeof guards (not just != null): stdin is a system boundary — a null or
+  // malformed field must fall through to the ccusage estimate, not render junk.
+  const fiveHour = input.rate_limits?.five_hour;
+  if (typeof fiveHour?.used_percentage === 'number' && typeof fiveHour.resets_at === 'number') {
+    segments.push(
+      formatRateLimitQuota(fiveHour.used_percentage, fiveHour.resets_at, now, config.cells),
+    );
+  } else if (cc) {
+    segments.push(formatQuota(cc.timeLeft, Math.round(cc.block), config.quota, config.cells));
+  }
 
   return segments.join(' | ');
 };
