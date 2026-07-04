@@ -5,7 +5,7 @@
 // background and writes a single machine-wide line file; every tick just reads that
 // file. See src/types.ts for the contract and CLAUDE.md for the invariants.
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
 import type { CcusageData, Config } from './types';
@@ -159,6 +159,33 @@ export const shouldSpawnJob = (lineAgeMs: number, jobAgeMs: number, refreshMs: n
   lineAgeMs > refreshMs && jobAgeMs > JOB_MAX_AGE_MS;
 
 /**
+ * Atomically claim the right to spawn THE job this generation. `shouldSpawnJob` alone
+ * has a TOCTOU gap: in a cold burst (many sessions ticking at once with no marker yet)
+ * every one reads "no marker" and spawns, so N sessions launch N ccusage recomputes
+ * instead of one. `writeFileSync(marker, …, {flag:'wx'})` is an exclusive create — only
+ * the first caller wins, the rest get EEXIST — which serialises that burst to a single
+ * spawn. A stale marker (a job that died without cleaning up; we only reach here once
+ * `shouldSpawnJob` deemed it stale/absent) is reclaimed best-effort — in that rare
+ * dead-job case two sessions may both reclaim and spawn, which is harmless (both write
+ * the same line). Returns whether we won the claim.
+ */
+export const claimSpawnSlot = (marker: string, now: number): boolean => {
+  try {
+    writeFileSync(marker, String(process.pid), { flag: 'wx' });
+    return true; // created it — we're the one
+  } catch {
+    // Marker already exists: a peer just created it (fresh → yield) or it's stale (reclaim).
+    try {
+      if (now - statSync(marker).mtimeMs <= JOB_MAX_AGE_MS) return false;
+      writeFileSync(marker, String(process.pid)); // stale dead-job marker → reclaim
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
+/**
  * The `sh -c` script the detached job runs. Reads the payload on stdin, writes stdout
  * to `tmp`, and — only if `tmp` ended up non-empty — renames it over `line` (atomic on
  * one filesystem). Whatever happens, `tmp` and the marker are removed. So a failed or
@@ -200,8 +227,11 @@ export const maybeSpawnCcusageJob = async (
       tmp: `${stateDir()}/ccss-ccusage.${process.pid}.tmp`,
     };
 
+    // Atomically win the single spawn slot before doing any work — a cold burst of
+    // sessions serialises to one recompute here, not one per session.
+    if (!claimSpawnSlot(paths.marker, now)) return false;
+
     await Bun.write(paths.payload, payloadJson);
-    await Bun.write(paths.marker, String(process.pid)); // touch — mtime gates the next spawn
 
     const proc = Bun.spawn(['sh', '-c', buildJobScript(paths)], {
       stdin: 'ignore',

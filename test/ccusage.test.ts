@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, test } from 'bun:test';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 import type { CcusageData, Config } from '../src/types';
 import {
   buildJobScript,
+  claimSpawnSlot,
   maybeSpawnCcusageJob,
   parseCcusage,
   readCcusageLine,
@@ -205,5 +206,20 @@ describe('readCcusageLine + spawn mechanism (scratch state dir)', () => {
     const config = { ccusageRefreshSec: 30 } as Config;
     // now only 1s after the line was written → within the refresh interval.
     expect(await maybeSpawnCcusageJob('{}', mt + 1000, config)).toBe(false);
+  });
+
+  test('claimSpawnSlot serialises a burst to one winner, but reclaims a stale marker', async () => {
+    const marker = `${dir}/ccss-ccusage.claim-test`;
+    await rm(marker, { force: true });
+    const now = Date.now();
+    // First caller wins (exclusive create); every simultaneous peer loses.
+    expect(claimSpawnSlot(marker, now)).toBe(true);
+    expect(claimSpawnSlot(marker, now)).toBe(false);
+    expect(claimSpawnSlot(marker, now)).toBe(false);
+    // A stale marker (dead job that never cleaned up) is reclaimable.
+    const staleSec = (now - 40_000) / 1000;
+    await utimes(marker, staleSec, staleSec);
+    expect(claimSpawnSlot(marker, now)).toBe(true);
+    await rm(marker, { force: true });
   });
 });
