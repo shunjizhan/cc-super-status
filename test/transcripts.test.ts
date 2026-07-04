@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { parseTranscriptText, tokenCount } from '../src/transcripts';
+import type { FileActivity } from '../src/types';
+import { countActive, parseTranscriptText, sessionOrigin, tokenCount } from '../src/transcripts';
 
 // One assistant transcript line as a JSON string.
 const line = (
@@ -145,5 +146,74 @@ describe('parseTranscriptText — line handling', () => {
   test('falls back to the raw timestamp string as id when message.id is absent', () => {
     const noId = JSON.stringify({ type: 'assistant', timestamp: TS, message: { usage: { input_tokens: 9 } } });
     expect(parseTranscriptText(noId, false, RAW_CACHE)[0]?.id).toBe(TS);
+  });
+});
+
+describe('sessionOrigin', () => {
+  test('main transcript → session = basename sans .jsonl, no subagent', () => {
+    expect(sessionOrigin('/p/enc-cur/sessCUR.jsonl')).toEqual({ session: 'sessCUR', subagent: null });
+  });
+
+  test('subagent → session = the <session_id> dir before /subagents/, subagent = full path', () => {
+    const p = '/p/enc-cur/sessCUR/subagents/agent-x.jsonl';
+    expect(sessionOrigin(p)).toEqual({ session: 'sessCUR', subagent: p });
+  });
+
+  test('nested workflow subagent → session = <session_id>, subagent = full path', () => {
+    const p = '/p/proj/85cb3055/subagents/workflows/wf_1/agent-y.jsonl';
+    expect(sessionOrigin(p)).toEqual({ session: '85cb3055', subagent: p });
+  });
+});
+
+describe('countActive', () => {
+  const NOW = 1_780_228_920_000;
+  const ACTIVE = 15_000; // 15s freshness window
+  // Helper: a FileActivity touched `agoMs` before NOW.
+  const file = (session: string, subagent: string | null, agoMs: number): FileActivity => ({
+    session,
+    subagent,
+    mtimeMs: NOW - agoMs,
+  });
+
+  test('empty → zero counts', () => {
+    expect(countActive([], NOW, ACTIVE)).toEqual({ sessions: 0, subagents: 0 });
+  });
+
+  test('counts distinct sessions among fresh files', () => {
+    const files = [file('s1', null, 1000), file('s2', null, 2000), file('s2', null, 3000)];
+    expect(countActive(files, NOW, ACTIVE)).toEqual({ sessions: 2, subagents: 0 });
+  });
+
+  test('a session and its sub-agent → one session + one sub-agent', () => {
+    const files = [file('s1', null, 1000), file('s1', '/p/s1/subagents/x.jsonl', 1000)];
+    expect(countActive(files, NOW, ACTIVE)).toEqual({ sessions: 1, subagents: 1 });
+  });
+
+  test('a sub-agent busy while its main transcript is stale still marks the session active', () => {
+    // Main transcript went quiet (coordinator idle-waiting), sub-agent still working.
+    const files = [file('s1', null, 60_000), file('s1', '/p/s1/subagents/x.jsonl', 2000)];
+    expect(countActive(files, NOW, ACTIVE)).toEqual({ sessions: 1, subagents: 1 });
+  });
+
+  test('distinct sub-agents across sessions are each counted', () => {
+    const files = [
+      file('s1', '/p/s1/subagents/a.jsonl', 1000),
+      file('s1', '/p/s1/subagents/b.jsonl', 1000),
+      file('s2', '/p/s2/subagents/a.jsonl', 1000),
+    ];
+    expect(countActive(files, NOW, ACTIVE)).toEqual({ sessions: 2, subagents: 3 });
+  });
+
+  test('stale files (touched > activeMs ago) are excluded — this is what makes it agile', () => {
+    const files = [
+      file('live', null, 5_000), // 5s ago → fresh
+      file('stale', '/p/stale/subagents/x.jsonl', 20_000), // 20s ago → dropped
+    ];
+    expect(countActive(files, NOW, ACTIVE)).toEqual({ sessions: 1, subagents: 0 });
+  });
+
+  test('the freshness boundary is inclusive (touched exactly activeMs ago still counts)', () => {
+    expect(countActive([file('s1', null, ACTIVE)], NOW, ACTIVE)).toEqual({ sessions: 1, subagents: 0 });
+    expect(countActive([file('s1', null, ACTIVE + 1)], NOW, ACTIVE)).toEqual({ sessions: 0, subagents: 0 });
   });
 });

@@ -1,0 +1,2 @@
+{"type":"result","timestamp":"2026-05-31T12:01:00.000Z","agentId":"agent-x","result":{"ok":true}}
+{"type":"log","timestamp":"2026-05-31T12:01:05.000Z","message":{"text":"no usage block on this line"}}

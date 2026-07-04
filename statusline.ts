@@ -34,13 +34,19 @@ const main = async (): Promise<void> => {
     v === undefined ? fallback : !/^(0|false|no|off)$/i.test(v.trim());
 
   const windowSec = num(process.env.CCSS_WINDOW, 120);
+  const activeWindowSec = num(process.env.CCSS_ACTIVE_WINDOW, 15);
   const config: Config = {
     quota: num(process.env.CCSS_QUOTA, 125),
     windowSec,
+    activeWindowSec,
     includeCache: bool(process.env.CCSS_CACHE, true),
     effectiveRate: bool(process.env.CCSS_EFFECTIVE, true),
+    showWeekly: bool(process.env.CCSS_WEEKLY, false),
     cells: 10,
-    lookbackMs: windowSec * 1000 + 60_000,
+    // Cover BOTH consumers: the rate needs files within windowSec, the live counts
+    // within activeWindowSec. Use the larger (+60s buffer) so a file that's fresh for
+    // either isn't dropped before it's counted — e.g. a large CCSS_ACTIVE_WINDOW.
+    lookbackMs: Math.max(windowSec, activeWindowSec) * 1000 + 60_000,
     tailBytes: 1_048_576,
     projectsDir: `${process.env.HOME}/.claude/projects`,
   };
@@ -58,12 +64,12 @@ const main = async (): Promise<void> => {
       input.transcript_path,
       input.session_id,
       now,
-    ).catch(() => []);
+    ).catch(() => ({ entries: [], files: [] }));
 
     ccusageLine = await ccusagePromise;
-    const entries = await entriesPromise;
+    const { entries, files } = await entriesPromise;
 
-    process.stdout.write(buildStatusline({ input, ccusageLine, entries, now, config }));
+    process.stdout.write(buildStatusline({ input, ccusageLine, entries, files, now, config }));
   } catch {
     process.stdout.write(ccusageLine ?? '');
   }

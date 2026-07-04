@@ -3,7 +3,7 @@
 A souped-up [Claude Code](https://docs.anthropic.com/en/docs/claude-code) status line: model + effort, burn rate, **cross-session** token throughput, cost breakdown, and a colored quota bar — all on one line.
 
 ```
-🤖 Opus 4.8-1m (ultracode) | 🔥 $13.18/hr | ⭐️ {50}300t/s | 💰 $13.5 / $31 / $330 | ⚡ 2h 35m, 75% left ▰▰▰▰▰▰▰▱▱▱
+🤖 Opus 4.8-1m (ultracode) | 🔥 $13.18/hr | ⭐️ {50}300t/s 3=>7 | 💰 $13.5 / $31 / $330 | ⚡ 42m 53% ▰▰▰▰▰▱▱▱▱▱
 ```
 
 Runs on [Bun](https://bun.sh) (no build step — `bun run` executes the TypeScript directly).
@@ -16,9 +16,9 @@ Segments are joined by ` | ` in this fixed order. The two **ccusage-derived** se
 | --- | --- | --- |
 | 🤖 `Opus 4.8-1m (ultracode)` | Model + reasoning effort. `(1M context)` collapses to `-1m`; effort `xhigh` renders as `ultracode`, other levels pass through, absent effort is omitted. | stdin JSON (`model`, `effort`) |
 | 🔥 `$13.18/hr` | Current dollar **burn rate**, verbatim from ccusage. | `ccusage statusline` |
-| ⭐️ `{50}300t/s` | **Token throughput** over the sliding window, charge-weighted by default (⭐️; raw mode shows 🌟 — see below). `{cur}all` — `cur` = current session (this transcript + its subagents), `all` = every recent session. Collapses to a single `Nt/s` when `cur === all`. | transcripts on disk |
+| ⭐️ `{50}300t/s 3=>7` | **Token throughput** over the sliding window, charge-weighted by default (⭐️; raw mode shows 🌟 — see below). `{cur}all` — `cur` = current session (this transcript + its subagents), `all` = every recent session. Collapses to a single `Nt/s` when `cur === all`. The trailing `<sessions>=><subagents>` counts the sessions and sub-agents **working right now** — those whose transcript was touched in the last `CCSS_ACTIVE_WINDOW` seconds (default 15). Omitted when nothing is active. | transcripts on disk |
 | 💰 `$13.5 / $31 / $330` | Cost: **session / block / today** (session to 1 decimal, block and today rounded). | `ccusage statusline` |
-| ⚡ `2h 35m, 75% left ▰▰▰▰▰▰▰▱▱▱` | **Session remaining.** Time until the current 5-hour rate-limit window resets, then `% left` with a colored bar. Color: red `< 20%`, amber `< 50%`, green otherwise. Uses Claude Code's first-party `rate_limits.five_hour` (`used_percentage` + `resets_at`, passed on stdin for Pro/Max subscribers since CC 2.1.132) — the official numbers, same as `/usage`. Falls back to the old ccusage `$`-quota estimate (`(CCSS_QUOTA − block) / CCSS_QUOTA`) when that data is absent (e.g. API-key billing). | stdin JSON `rate_limits`, else `ccusage statusline` + `CCSS_QUOTA` |
+| ⚡ `42m 53% ▰▰▰▰▰▱▱▱▱▱` (+ `3d 2h 45% ▰▰▰▰▱▱▱▱▱▱` with `CCSS_WEEKLY`) | **Session remaining** (plus **weekly**, opt-in). The **5-hour** session bar always shows: `<reset> <%> <bar>` — time to reset, then `%` remaining with a colored bar (reset to the minute). With `CCSS_WEEKLY` set, a **7-day** weekly bar (reset as `Nd Nh`) is appended after a space; off by default, in which case it's neither computed nor shown. Color: red `< 20%`, amber `< 50%`, green otherwise. Uses Claude Code's first-party `rate_limits.five_hour` / `.seven_day` (`used_percentage` + `resets_at`, on stdin for Pro/Max since CC 2.1.132) — the official numbers, same as `/usage`. The 5-hour window falls back to the ccusage `$`-quota estimate (`(CCSS_QUOTA − block) / CCSS_QUOTA`) when first-party data is absent (e.g. API-key billing), while the weekly window has no ccusage equivalent. | stdin JSON `rate_limits`, else `ccusage statusline` + `CCSS_QUOTA` |
 
 ### How the ⭐️ token rate works
 
@@ -45,6 +45,14 @@ In either mode, `CCSS_CACHE=0` drops the two cache terms entirely (counting only
 
 `cur` counts only the active session — its main transcript plus any subagent transcripts under `<session_id>/subagents/` — while `all` counts every session in the window. This is what lets you see total throughput across parallel Claude Code sessions.
 
+**Active session / sub-agent counts (`3=>7`).** Right after the rate, `cc-super-status` appends how many distinct **sessions** and **sub-agents** are working *right now*. This is deliberately **decoupled from the token-rate window** — the rate is a 120s sliding average (smooth, but laggy), whereas "who's active" should snap up and down quickly. So the counts use a different, fresher signal: a transcript's **file modification time**. A session or sub-agent is "active" if its transcript was written within the last `CCSS_ACTIVE_WINDOW` seconds (default 15).
+
+- A session's key groups its main transcript with its sub-agents, so it's counted **once** — and it stays counted while only its sub-agents are busy (e.g. a coordinator idle-waiting on background agents). Each sub-agent transcript is counted individually.
+- mtime advances on every write (messages, tool calls, tool results), so it tracks live work far better than completed-message timestamps — which only move when a model turn finishes. The trade-off: during a single long tool call (longer than the window) a transcript can go quiet and an agent may briefly blink out; raise `CCSS_ACTIVE_WINDOW` if that bothers you.
+- When you're idle-waiting on background sub-agents, the main session's own events go quiet, so Claude Code wouldn't re-run the status line on its own. Set [`refreshInterval`](https://code.claude.com/docs/en/statusline) in your `statusLine` settings (e.g. `5`) so the count keeps updating — and decays to zero promptly — on a fixed timer.
+
+Handy when you fan out parallel sessions or spawn workflow/Task sub-agents and want to see the live concurrency at a glance.
+
 ## Data sources
 
 - **stdin JSON** — Claude Code pipes a JSON blob to the status line command on every render (`model`, `effort`, `session_id`, `transcript_path`, `cwd`, `rate_limits`). Drives the 🤖 segment and (when `rate_limits` is present) the ⚡ segment.
@@ -59,8 +67,10 @@ Each source fails independently: if ccusage times out or transcripts can't be re
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CCSS_QUOTA` | `125` | Dollar quota per 5-hour block, used for the ⚡ `% left` bar **only in the ccusage fallback path** (ignored when Claude Code passes the five-hour rate-limit window on stdin). |
+| `CCSS_QUOTA` | `125` | Dollar quota per 5-hour block, used for the ⚡ 5-hour `%` bar **only in the ccusage fallback path** (ignored when Claude Code passes the five-hour rate-limit window on stdin). |
+| `CCSS_WEEKLY` | `false` | Show the **7-day weekly** bar after the 5-hour bar. Off by default; the weekly window is neither computed nor rendered unless set to `1`/`true`/`yes`/`on`. |
 | `CCSS_WINDOW` | `120` | Token-rate sliding window, in seconds. |
+| `CCSS_ACTIVE_WINDOW` | `15` | Freshness window for the ⭐️ `<sessions>=><subagents>` counts, in seconds. A transcript touched within this many seconds counts as active. Lower = more agile (drops to zero faster after work stops, but may flicker during long tool calls); higher = steadier. Independent of `CCSS_WINDOW`. |
 | `CCSS_EFFECTIVE` | `true` | Charge-weight the token rate (output ×5, cache write ×2, cache read ×0.1, input ×1) so it tracks cost-equivalent tokens, shown with ⭐️. Set to `0`/`false`/`no`/`off` for raw 1×-per-token throughput, shown with 🌟. |
 | `CCSS_CACHE` | `true` | Include cache tokens (creation + read) in the rate. Set to `0`/`false`/`no`/`off` to count only input + output. With `CCSS_EFFECTIVE=0` and `CCSS_CACHE=1` the raw rate matches ccusage's total-token definition. |
 
@@ -74,12 +84,15 @@ Add to your `settings.json` (e.g. `~/.claude/settings.json`):
 {
   "statusLine": {
     "type": "command",
-    "command": "bun run /Users/sybuu/Projects/cc-super-status/statusline.ts"
+    "command": "bun run /Users/sybuu/Projects/cc-super-status/statusline.ts",
+    "refreshInterval": 5
   }
 }
 ```
 
 Use bun's absolute path (e.g. `/opt/homebrew/bin/bun run …`) if the status line runs in an environment where `bun` isn't on `PATH`.
+
+`refreshInterval` (seconds) re-runs the command on a fixed timer in addition to Claude Code's event-driven updates. It's recommended here: the ⭐️ live session/sub-agent counts should keep ticking (and decay to zero) even while the main session sits idle waiting on background sub-agents — a period when no events fire. `5` is a good balance; each tick also re-spawns `ccusage` (capped at 3s).
 
 Optionally set the env overrides inline for that command, e.g.:
 
@@ -105,7 +118,7 @@ bun test      # runs the unit + deterministic e2e suite
 - `src/rate.ts` — `computeRate`: pure dedup → window → per-second rate.
 - `src/format.ts` — pure rendering helpers (model, speed, bar, truecolor, quota).
 - `src/ccusage.ts` — runs `ccusage statusline` and parses its line.
-- `src/transcripts.ts` — `gatherEntries`: reads transcripts off disk into token events.
+- `src/transcripts.ts` — `gatherEntries` reads transcripts off disk into token events + per-file activity; `countActive` (pure) turns that activity into the live session/sub-agent counts.
 - `src/buildStatusline.ts` — pure orchestrator composing the final line.
 - `statusline.ts` — the impure entry point Claude Code runs.
 - `test/` — unit tests per module plus a fixture-driven `e2e.test.ts`.

@@ -13,7 +13,7 @@
 
 import { readdir, stat } from 'node:fs/promises';
 
-import type { Config, TokenEntry } from './types';
+import type { ActiveCounts, Config, FileActivity, TokenEntry } from './types';
 
 /** The token usage block of one assistant message (everything optional/loose). */
 interface Usage {
@@ -169,41 +169,90 @@ const isCurrent = (
 };
 
 /**
- * Gather TokenEntry[] from every recently-modified transcript under
- * `config.projectsDir`.
+ * Classify a transcript path into its session id and (if it's a subagent) its
+ * own distinct key, independent of which session is "current".
+ *  - A subagent lives under `<session_id>/subagents/…` (possibly nested, e.g.
+ *    `…/subagents/workflows/<wf>/agent-*.jsonl`): session = the `<session_id>`
+ *    segment before `/subagents/`, subagent = the full path.
+ *  - A main transcript is `<…>/<session_id>.jsonl`: session = its basename
+ *    without the extension, subagent = null.
+ * A session and its subagents thus resolve to the same `session` key.
+ */
+export const sessionOrigin = (path: string): Pick<FileActivity, 'session' | 'subagent'> => {
+  const sub = path.match(/\/([^/]+)\/subagents\//);
+  if (sub) return { session: sub[1], subagent: path };
+  const base = path.slice(path.lastIndexOf('/') + 1).replace(/\.jsonl$/, '');
+  return { session: base, subagent: null };
+};
+
+/**
+ * Count the sessions and sub-agents that are active *right now* — i.e. whose
+ * transcript was written within `activeMs`. Pure: distinct `session` keys →
+ * active sessions (a session groups with its own sub-agents, counted once);
+ * distinct non-null `subagent` keys → active sub-agents. This is deliberately
+ * decoupled from the token-rate window: it tracks live work (file mtime), so it
+ * decays within `activeMs` of an agent going quiet, not within the rate window.
+ */
+export const countActive = (
+  files: FileActivity[],
+  now: number,
+  activeMs: number,
+): ActiveCounts => {
+  const sessions = new Set<string>();
+  const subagents = new Set<string>();
+  for (const f of files) {
+    if (now - f.mtimeMs > activeMs) continue; // touched too long ago → not live
+    sessions.add(f.session);
+    if (f.subagent !== null) subagents.add(f.subagent);
+  }
+  return { sessions: sessions.size, subagents: subagents.size };
+};
+
+/**
+ * Gather token events and per-file activity from every recently-modified
+ * transcript under `config.projectsDir`.
  *
  * Steps (impure — filesystem I/O):
  *  1. Walk projectsDir for all `*.jsonl` files.
  *  2. Keep only files whose mtime is within `config.lookbackMs` of `now`.
  *  3. Read the tail (`config.tailBytes`) of each and parse assistant lines.
  *  4. Tag each entry current/non-current per `isCurrent`.
+ *  5. For each file that yielded ≥1 token event (a real assistant transcript —
+ *     excludes journal.jsonl etc.), record a FileActivity (session, subagent,
+ *     mtime) for the ⭐️ live counts.
  *
- * Never throws: unreadable files / dirs are skipped and yield no entries.
+ * Never throws: unreadable files / dirs are skipped and yield nothing.
  */
 export const gatherEntries = async (
   config: Config,
   transcriptPath: string | undefined,
   sessionId: string | undefined,
   now: number,
-): Promise<TokenEntry[]> => {
+): Promise<{ entries: TokenEntry[]; files: FileActivity[] }> => {
   const paths = await walkJsonl(config.projectsDir);
 
   const perFile = await Promise.all(
-    paths.map(async (path): Promise<TokenEntry[]> => {
+    paths.map(async (path): Promise<{ entries: TokenEntry[]; file: FileActivity | null }> => {
       try {
         const { mtimeMs } = await stat(path);
-        if (now - mtimeMs > config.lookbackMs) return [];
+        if (now - mtimeMs > config.lookbackMs) return { entries: [], file: null };
 
         const text = await readTail(path, config.tailBytes);
-        return parseTranscriptText(text, isCurrent(path, transcriptPath, sessionId), {
+        const entries = parseTranscriptText(text, isCurrent(path, transcriptPath, sessionId), {
           includeCache: config.includeCache,
           effectiveRate: config.effectiveRate,
         });
+        // Only real assistant transcripts (≥1 token event) count as activity.
+        const file = entries.length > 0 ? { ...sessionOrigin(path), mtimeMs } : null;
+        return { entries, file };
       } catch {
-        return [];
+        return { entries: [], file: null };
       }
     }),
   );
 
-  return perFile.flat();
+  return {
+    entries: perFile.flatMap((p) => p.entries),
+    files: perFile.flatMap((p) => (p.file ? [p.file] : [])),
+  };
 };

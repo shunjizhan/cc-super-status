@@ -1,13 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+  ccusageLane,
+  fiveHourLane,
   formatModel,
-  formatQuota,
-  formatRateLimitQuota,
+  formatQuotaSegment,
   formatResetDuration,
   formatSpeed,
+  formatWeeklyDuration,
   quotaRgb,
   renderBar,
+  sevenDayLane,
   truecolor,
 } from '../src/format';
 
@@ -40,21 +43,41 @@ describe('formatModel', () => {
 });
 
 describe('formatSpeed', () => {
-  test('collapses to single value when cur === all (idle 0/0)', () => {
-    expect(formatSpeed({ cur: 0, all: 0 }, true)).toBe('⭐️ 0t/s');
+  const NONE = { sessions: 0, subagents: 0 };
+
+  test('nothing active → no suffix (idle 0/0)', () => {
+    expect(formatSpeed({ cur: 0, all: 0 }, NONE, true)).toBe('⭐️ 0t/s');
   });
 
-  test('collapses when cur === all (5/5)', () => {
-    expect(formatSpeed({ cur: 5, all: 5 }, true)).toBe('⭐️ 5t/s');
+  test('collapses when cur === all (5/5) and appends the live counts', () => {
+    expect(formatSpeed({ cur: 5, all: 5 }, { sessions: 1, subagents: 0 }, true)).toBe('⭐️ 5t/s 1=>0');
   });
 
-  test('uses braces when cur !== all', () => {
-    expect(formatSpeed({ cur: 50, all: 300 }, true)).toBe('⭐️ {50}300t/s');
+  test('uses braces when cur !== all and appends the counts (the canonical example)', () => {
+    expect(formatSpeed({ cur: 100, all: 5470 }, { sessions: 5, subagents: 10 }, true)).toBe(
+      '⭐️ {100}5470t/s 5=>10',
+    );
+  });
+
+  test('solo work with a sub-agent → 1=>1', () => {
+    expect(formatSpeed({ cur: 5, all: 5 }, { sessions: 1, subagents: 1 }, true)).toBe('⭐️ 5t/s 1=>1');
+  });
+
+  test('counts are decoupled from the rate: live agents show even when the rate rounds to 0', () => {
+    // The counts track file mtimes, not throughput — so a just-touched session
+    // still shows while its per-second rate rounds down to 0 (the point of the split).
+    expect(formatSpeed({ cur: 0, all: 0 }, { sessions: 2, subagents: 3 }, true)).toBe('⭐️ 0t/s 2=>3');
+  });
+
+  test('suffix is suppressed only when no session is active', () => {
+    expect(formatSpeed({ cur: 300, all: 300 }, NONE, true)).toBe('⭐️ 300t/s');
   });
 
   test('raw mode (effectiveRate=false) uses 🌟 instead of ⭐️', () => {
-    expect(formatSpeed({ cur: 0, all: 0 }, false)).toBe('🌟 0t/s');
-    expect(formatSpeed({ cur: 50, all: 300 }, false)).toBe('🌟 {50}300t/s');
+    expect(formatSpeed({ cur: 0, all: 0 }, NONE, false)).toBe('🌟 0t/s');
+    expect(formatSpeed({ cur: 50, all: 300 }, { sessions: 5, subagents: 10 }, false)).toBe(
+      '🌟 {50}300t/s 5=>10',
+    );
   });
 });
 
@@ -135,42 +158,94 @@ describe('formatResetDuration', () => {
   });
 });
 
-describe('formatRateLimitQuota', () => {
-  // NOW in ms; resets_at is Unix epoch SECONDS (Claude Code rate_limits shape).
-  const NOW = 1_780_228_920_000;
-
-  test('renders time-to-reset + colored "<pct>% left <bar>" from used_percentage', () => {
-    // used 23.5% → pct = round(76.5) = 77 → green; resets in 2h 35m.
-    const resetsAt = NOW / 1000 + 2 * 3600 + 35 * 60;
-    const pct = 77;
-    const colored = truecolor(`${pct}% left ${renderBar(pct, 10)}`, quotaRgb(pct));
-    expect(formatRateLimitQuota(23.5, resetsAt, NOW, 10)).toBe(`⚡ 2h 35m, ${colored}`);
+describe('formatWeeklyDuration', () => {
+  test('days + hours', () => {
+    expect(formatWeeklyDuration((3 * 24 + 2) * 3600 * 1000)).toBe('3d 2h');
   });
 
-  test('clamps used_percentage over 100 to 0% left (red)', () => {
-    const resetsAt = NOW / 1000 + 600;
-    const colored = truecolor(`0% left ${renderBar(0, 10)}`, quotaRgb(0));
-    expect(formatRateLimitQuota(130, resetsAt, NOW, 10)).toBe(`⚡ 10m, ${colored}`);
+  test('whole days keep the 0h part', () => {
+    expect(formatWeeklyDuration(3 * 24 * 3600 * 1000)).toBe('3d 0h');
   });
 
-  test('used 0% → 100% left, past reset time → 0m', () => {
-    const colored = truecolor(`100% left ${renderBar(100, 10)}`, quotaRgb(100));
-    expect(formatRateLimitQuota(0, NOW / 1000 - 60, NOW, 10)).toBe(`⚡ 0m, ${colored}`);
+  test('hours only when under a day', () => {
+    expect(formatWeeklyDuration(5 * 3600 * 1000)).toBe('5h');
+  });
+
+  test('partial hours floor to the hour', () => {
+    expect(formatWeeklyDuration((2 * 3600 + 59 * 60) * 1000)).toBe('2h');
+  });
+
+  test('under an hour → 0h (weekly window never shows minutes)', () => {
+    expect(formatWeeklyDuration(45 * 60 * 1000)).toBe('0h');
+  });
+
+  test('zero and negative clamp to 0h', () => {
+    expect(formatWeeklyDuration(0)).toBe('0h');
+    expect(formatWeeklyDuration(-5000)).toBe('0h');
   });
 });
 
-describe('formatQuota', () => {
-  test('assembles "⚡ <t>, " + colored "<pct>% left <bar>"', () => {
-    // quota=125, blockCost=31.25 → pct = round(75%) = 75 → green
-    const pct = 75;
-    const bar = renderBar(pct, 10);
-    const colored = truecolor(`${pct}% left ${bar}`, quotaRgb(pct));
-    expect(formatQuota('2h 35m', 31.25, 125, 10)).toBe(`⚡ 2h 35m, ${colored}`);
+describe('fiveHourLane', () => {
+  // NOW in ms; resets_at is Unix epoch SECONDS (Claude Code rate_limits shape).
+  const NOW = 1_780_228_920_000;
+
+  test('remaining pct (round(100 - used)) + minute-precision time', () => {
+    // used 23.5 → 76.5 → 77; resets in 2h 35m.
+    const resetsAt = NOW / 1000 + 2 * 3600 + 35 * 60;
+    expect(fiveHourLane(23.5, resetsAt, NOW)).toEqual({ pct: 77, timeLeft: '2h 35m' });
   });
 
-  test('clamps pct to [0,100] when over-spent', () => {
-    // blockCost > quota → raw pct negative → clamps to 0 → red
-    const colored = truecolor(`0% left ${renderBar(0, 10)}`, quotaRgb(0));
-    expect(formatQuota('0m', 200, 125, 10)).toBe(`⚡ 0m, ${colored}`);
+  test('clamps over-100 used to 0%; past reset → 0m', () => {
+    expect(fiveHourLane(130, NOW / 1000 - 60, NOW)).toEqual({ pct: 0, timeLeft: '0m' });
+  });
+});
+
+describe('sevenDayLane', () => {
+  const NOW = 1_780_228_920_000;
+
+  test('remaining pct + day/hour time (no minutes)', () => {
+    // used 80 → 20; resets in 3d 2h.
+    const resetsAt = NOW / 1000 + (3 * 24 + 2) * 3600;
+    expect(sevenDayLane(80, resetsAt, NOW)).toEqual({ pct: 20, timeLeft: '3d 2h' });
+  });
+
+  test('under a day shows hours only', () => {
+    expect(sevenDayLane(55, NOW / 1000 + 5 * 3600, NOW)).toEqual({ pct: 45, timeLeft: '5h' });
+  });
+});
+
+describe('ccusageLane', () => {
+  test('pct = round((quota - block)/quota*100); timeLeft passes through', () => {
+    // quota 125, block 31.25 → 75.
+    expect(ccusageLane('2h 35m', 31.25, 125)).toEqual({ pct: 75, timeLeft: '2h 35m' });
+  });
+
+  test('clamps to 0 when over-spent', () => {
+    expect(ccusageLane('0m', 200, 125)).toEqual({ pct: 0, timeLeft: '0m' });
+  });
+});
+
+describe('formatQuotaSegment', () => {
+  const fh = { pct: 60, timeLeft: '1h 5m' };
+  const wd = { pct: 20, timeLeft: '3d 2h' };
+
+  test('both lanes → "<5h piece> <7d piece>", each a solid bar, space-separated', () => {
+    const fhPiece = `1h 5m ${truecolor(`60% ${renderBar(60, 10)}`, quotaRgb(60))}`;
+    const wdPiece = `3d 2h ${truecolor(`20% ${renderBar(20, 10)}`, quotaRgb(20))}`;
+    expect(formatQuotaSegment(fh, wd, 10)).toBe(`⚡ ${fhPiece} ${wdPiece}`);
+  });
+
+  test('only 5-hour lane → plain labelled bar', () => {
+    const colored = truecolor(`60% ${renderBar(60, 10)}`, quotaRgb(60));
+    expect(formatQuotaSegment(fh, null, 10)).toBe(`⚡ 1h 5m ${colored}`);
+  });
+
+  test('only weekly lane → plain labelled bar', () => {
+    const colored = truecolor(`20% ${renderBar(20, 10)}`, quotaRgb(20));
+    expect(formatQuotaSegment(null, wd, 10)).toBe(`⚡ 3d 2h ${colored}`);
+  });
+
+  test('no lanes → empty string (caller omits the ⚡ segment)', () => {
+    expect(formatQuotaSegment(null, null, 10)).toBe('');
   });
 });
