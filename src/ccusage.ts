@@ -5,7 +5,7 @@
 // background and writes a single machine-wide line file; every tick just reads that
 // file. See src/types.ts for the contract and CLAUDE.md for the invariants.
 
-import { existsSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
 import type { CcusageData, Config } from './types';
@@ -231,16 +231,32 @@ export const maybeSpawnCcusageJob = async (
     // sessions serialises to one recompute here, not one per session.
     if (!claimSpawnSlot(paths.marker, now)) return false;
 
-    await Bun.write(paths.payload, payloadJson);
+    try {
+      await Bun.write(paths.payload, payloadJson);
 
-    const proc = Bun.spawn(['sh', '-c', buildJobScript(paths)], {
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
-    proc.unref();
-    return true;
+      const proc = Bun.spawn(['sh', '-c', buildJobScript(paths)], {
+        stdin: 'ignore',
+        stdout: 'ignore',
+        stderr: 'ignore',
+        // Detached + unref'd: the recompute outlives this tick. It survives our
+        // process.exit(0) by being reparented to the OS init process, and it writes to a
+        // file (not our pipe), so nothing this short-lived tick does truncates its output.
+        detached: true,
+      });
+      proc.unref();
+      return true;
+    } catch {
+      // We took the spawn slot but couldn't launch (e.g. a fork/write failure under
+      // load). Release the marker so the next tick retries at once, instead of it
+      // looking like a live job and freezing recomputes for JOB_MAX_AGE_MS.
+      try {
+        rmSync(paths.marker, { force: true });
+      } catch {
+        /* best-effort */
+      }
+      return false;
+    }
   } catch {
-    return false; // best-effort — a failed spawn just means the next tick retries.
+    return false; // best-effort — a failed pre-check just means the next tick retries.
   }
 };
