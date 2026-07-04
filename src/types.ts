@@ -3,14 +3,17 @@
 // Final status line (segments joined by " | "):
 //   🤖 <model>-1m (<effort>) | 🔥 <burn> | ⭐️ {<cur>}<all>t/s <sessions>=><subagents> | 💰 $<session> / $<block> / $<today> | ⚡ <5hTime> <5h%> <bar> <7dTime> <7d%> <bar>
 //
-// Segment data sources are independent (so each can fail/degrade alone):
-//   - 🤖 model + effort  ← stdin JSON (StatuslineInput)
-//   - 🔥 / 💰             ← `ccusage statusline` output (CcusageData)
-//   - ⚡ quota            ← stdin `rate_limits` (RateLimitWindow), ccusage $ estimate as fallback
-//   - ⭐️ token rate      ← transcripts on disk (TokenEntry[] → Rates)
-//   - ⭐️ active counts   ← transcript mtimes on disk (FileActivity[] → ActiveCounts); the
-//                          `<sessions>=><subagents>` suffix tracks *live* work, on its own
-//                          short window (CCSS_ACTIVE_WINDOW), independent of the rate window
+// Data flows on three clocks (see README "Multi-session architecture"), each sized to
+// what its data costs, so no render ever waits on something slow:
+//   - Instant (every tick, from stdin)  → 🤖 model + effort; 💰 session $ (cost.total_cost_usd)
+//   - 5s snapshot (leader walk, shared) → ⭐️ rate {cur}all; ⭐️ active counts; ⚡ quota bars
+//   - 30s job (detached ccusage, shared)→ 🔥 burn; 💰 block + today $; ⚡ fallback bar
+//
+// The 5s + 30s outputs are frozen into a SharedSnapshot on disk so every open session's
+// pane renders byte-identical globals within a generation. A pane's own `cur` rate and
+// session $ are legitimately per-pane (cur = its slice of the snapshot's per-session rates;
+// session $ from its own stdin). Segments still fail independently — a missing source drops
+// only its segment.
 
 /**
  * One first-party rate-limit window from Claude Code's stdin data
@@ -43,8 +46,24 @@ export interface StatuslineInput {
   session_id?: string;
   transcript_path?: string;
   cwd?: string;
+  /**
+   * Client-side session cost (`cost.total_cost_usd`, epoch-fresh on every tick).
+   * The 💰 session number — instant and per-session, so it needs no ccusage. Claude
+   * Code's own estimate; may differ slightly from the bill.
+   */
+  cost?: { total_cost_usd?: number };
   /** Each window may be independently absent; the whole object absent for API-key users. */
   rate_limits?: { five_hour?: RateLimitWindow; seven_day?: RateLimitWindow };
+}
+
+/**
+ * Rate-limit windows merged across all open sessions (see `mergeRateLimits`).
+ * Same shape as stdin `rate_limits`, but each window is the freshest reading any
+ * session has seen — an idle session's stale view can't drag the shared bars back.
+ */
+export interface MergedRateLimits {
+  five_hour?: RateLimitWindow;
+  seven_day?: RateLimitWindow;
 }
 
 /** One deduped token event from a transcript line (a single assistant message). */
@@ -66,8 +85,14 @@ export interface TokenEntry {
   tok: number;
   /** message timestamp, epoch milliseconds. */
   ts: number;
-  /** true if it belongs to the current session (main transcript OR its subagents). */
-  current: boolean;
+  /**
+   * Session this event belongs to — `sessionOrigin(path).session`, i.e. the main
+   * transcript's basename, shared by that session's sub-agents. This is what
+   * `computeRatesBySession` groups on; a pane's own `cur` is its own session's slice.
+   * (Replaces the old per-consumer `current` flag — "current" is now decided at
+   * render time by matching the pane's `session_id`, not baked into the entry.)
+   */
+  session: string;
 }
 
 /**
@@ -99,6 +124,30 @@ export interface Rates {
   cur: number;
   /** all sessions (>= cur). */
   all: number;
+}
+
+/**
+ * The frozen cross-session snapshot the leader writes each ~5s generation and every
+ * other pane reads (see `src/shared.ts`). Holds exactly the globals that must agree
+ * across panes; per-pane bits (session $, model) are added at render time from stdin.
+ */
+export interface SharedSnapshot {
+  /** schema version — a reader rejects a mismatch and rebuilds locally. */
+  v: number;
+  /** config fingerprint (`cfgKey`) — a reader ignores a snapshot built under a different config. */
+  cfgKey: string;
+  /** epoch ms the leader built this — the freshness clock (`readSnapshot` drops stale ones). */
+  asOf: number;
+  /** all-sessions per-second token rate (the ⭐️ `all`). */
+  all: number;
+  /** per-session per-second rate; a pane's `cur` is `bySession[session_id] ?? 0`. */
+  bySession: Record<string, number>;
+  /** active session / sub-agent counts (the ⭐️ `N=>M` suffix), frozen at `asOf`. */
+  counts: ActiveCounts;
+  /** merged rate-limit windows for the ⚡ bars, or null when no session has any. */
+  limits: MergedRateLimits | null;
+  /** validated global `ccusage statusline` line for 🔥/💰 block+today, or null. */
+  ccusage: string | null;
 }
 
 /** Structured data parsed from one `ccusage statusline` output line. */
@@ -149,6 +198,13 @@ export interface Config {
   showWeekly: boolean;
   /** quota bar width in cells (default 10). */
   cells: number;
+  /**
+   * How stale the shared ccusage line may get before a leader spawns a fresh
+   * detached recompute (env CCSS_CCUSAGE_REFRESH, default 30s). Bigger = less
+   * background work at the cost of older 🔥/💰; a full recompute is ~4s, so a 5s
+   * cadence would peg a core while 30s keeps it a ~13% duty cycle.
+   */
+  ccusageRefreshSec: number;
   /**
    * Transcript mtime lookback in ms — a file older than this is skipped entirely.
    * Must cover both consumers, so default = max(windowSec, activeWindowSec)*1000 +

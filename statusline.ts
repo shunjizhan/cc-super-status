@@ -1,14 +1,14 @@
 #!/usr/bin/env bun
 // Impure entry point — the binary Claude Code runs as its statusLine.command.
 //
-// Everything is wrapped in try/catch: on ANY failure we degrade to the raw
-// ccusage line (if we managed to read one) or an empty string. This process
-// must NEVER throw or print a stack trace, since its stdout becomes the
-// user's status line.
+// Thin shell: read stdin, resolve this generation's shared snapshot (leader walks &
+// publishes; followers read), render, print. Everything is wrapped so this process
+// NEVER throws or prints a stack trace — its stdout becomes the user's status line.
+// On total failure we degrade to the snapshot's raw ccusage line (if we got one) or ''.
 
-import type { Config, StatuslineInput } from './src/types';
-import { getCcusageLine } from './src/ccusage';
-import { gatherEntries } from './src/transcripts';
+import type { SharedSnapshot, StatuslineInput } from './src/types';
+import { parseConfig } from './src/config';
+import { resolveSnapshot } from './src/shared';
 import { buildStatusline } from './src/buildStatusline';
 
 const main = async (): Promise<void> => {
@@ -22,60 +22,24 @@ const main = async (): Promise<void> => {
   }
 
   const now = Date.now();
+  const config = parseConfig(process.env);
 
-  // Positive finite number from env, else fallback (rejects "0", negatives, and non-numbers).
-  const num = (v: string | undefined, fallback: number): number => {
-    const n = Number(v);
-    return Number.isFinite(n) && n > 0 ? n : fallback;
-  };
-
-  // Boolean from env: unset → fallback; 0/false/no/off (any case) → false; else true.
-  const bool = (v: string | undefined, fallback: boolean): boolean =>
-    v === undefined ? fallback : !/^(0|false|no|off)$/i.test(v.trim());
-
-  const windowSec = num(process.env.CCSS_WINDOW, 120);
-  const activeWindowSec = num(process.env.CCSS_ACTIVE_WINDOW, 15);
-  const config: Config = {
-    quota: num(process.env.CCSS_QUOTA, 125),
-    windowSec,
-    activeWindowSec,
-    includeCache: bool(process.env.CCSS_CACHE, true),
-    effectiveRate: bool(process.env.CCSS_EFFECTIVE, true),
-    showWeekly: bool(process.env.CCSS_WEEKLY, false),
-    cells: 10,
-    // Cover BOTH consumers: the rate needs files within windowSec, the live counts
-    // within activeWindowSec. Use the larger (+60s buffer) so a file that's fresh for
-    // either isn't dropped before it's counted — e.g. a large CCSS_ACTIVE_WINDOW.
-    lookbackMs: Math.max(windowSec, activeWindowSec) * 1000 + 60_000,
-    tailBytes: 1_048_576,
-    projectsDir: `${process.env.HOME}/.claude/projects`,
-  };
-
-  // ccusage (the costliest step and the degrade target) and the transcript walk
-  // are independent, so launch both up front and let them run concurrently. We
-  // assign ccusageLine before awaiting entries so the catch handler can still
-  // fall back to the raw ccusage line. Each side .catch()es to a neutral value,
-  // so the awaits never reject; the outer try/catch only guards buildStatusline.
-  let ccusageLine: string | null = null;
+  let shared: SharedSnapshot | undefined;
   try {
-    const ccusagePromise = getCcusageLine(raw, 3000).catch(() => null);
-    const entriesPromise = gatherEntries(
-      config,
-      input.transcript_path,
-      input.session_id,
-      now,
-    ).catch(() => ({ entries: [], files: [] }));
-
-    ccusageLine = await ccusagePromise;
-    const { entries, files } = await entriesPromise;
-
-    process.stdout.write(buildStatusline({ input, ccusageLine, entries, files, now, config }));
+    shared = await resolveSnapshot(config, input, raw, now);
+    process.stdout.write(buildStatusline({ input, shared, now, config }));
   } catch {
-    process.stdout.write(ccusageLine ?? '');
+    process.stdout.write(shared?.ccusage ?? '');
   }
 };
 
-main().catch(() => {
-  // Absolute last resort — never surface an error to the status line.
-  process.stdout.write('');
-});
+main()
+  .catch(() => {
+    // Absolute last resort — never surface an error to the status line.
+    process.stdout.write('');
+  })
+  .finally(() => {
+    // Exit explicitly so a stray handle can't keep this render process alive after the
+    // line is written (the detached ccusage job is unref'd and outlives us on its own).
+    process.exit(0);
+  });

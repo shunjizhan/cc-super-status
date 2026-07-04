@@ -4,9 +4,10 @@
 // the projects root for recently-modified *.jsonl transcripts, reads the tail of
 // each, and extracts one TokenEntry per assistant message that carries usage.
 //
-// "current" entries belong to the active session: its main transcript
-// (input.transcript_path) plus any subagent transcripts living under
-// `<...>/<session_id>/subagents/*.jsonl`. Everything else is non-current.
+// Every entry is tagged with its session (`sessionOrigin(path).session`), so the
+// rate can be split per session downstream. Which session is "current" is not a
+// property of the entry — it's decided at render time by matching the pane's own
+// session_id against the per-session rates.
 //
 // See src/types.ts for the authoritative contract. Dedup / windowing / rate math
 // all live downstream in src/rate.ts — this module only produces raw entries.
@@ -109,7 +110,8 @@ const readTail = async (path: string, tailBytes: number): Promise<string> => {
 };
 
 /**
- * Parse the assistant lines of one transcript's text into TokenEntry[].
+ * Parse the assistant lines of one transcript's text into TokenEntry[], each tagged
+ * with `session` (the transcript's owning session — see `sessionOrigin`).
  *
  * `opts` (includeCache + effectiveRate) is forwarded to `tokenCount`, which bakes
  * the per-component weighting into each entry's `tok`. Downstream — dedup,
@@ -117,7 +119,7 @@ const readTail = async (path: string, tailBytes: number): Promise<string> => {
  */
 export const parseTranscriptText = (
   text: string,
-  current: boolean,
+  session: string,
   opts: TokOpts,
 ): TokenEntry[] => {
   const entries: TokenEntry[] = [];
@@ -147,25 +149,10 @@ export const parseTranscriptText = (
     // Dedup key: message.id, falling back to the raw timestamp string.
     const id = parsed.message?.id ?? tsRaw;
 
-    entries.push({ id, tok, ts, current });
+    entries.push({ id, tok, ts, session });
   }
 
   return entries;
-};
-
-/**
- * Decide whether a transcript path belongs to the current session.
- *  - the main transcript itself (`transcriptPath`), or
- *  - anything under a `<session_id>/subagents/` directory.
- */
-const isCurrent = (
-  path: string,
-  transcriptPath: string | undefined,
-  sessionId: string | undefined,
-): boolean => {
-  if (transcriptPath !== undefined && path === transcriptPath) return true;
-  if (sessionId !== undefined && path.includes(`/${sessionId}/subagents/`)) return true;
-  return false;
 };
 
 /**
@@ -215,18 +202,18 @@ export const countActive = (
  * Steps (impure — filesystem I/O):
  *  1. Walk projectsDir for all `*.jsonl` files.
  *  2. Keep only files whose mtime is within `config.lookbackMs` of `now`.
- *  3. Read the tail (`config.tailBytes`) of each and parse assistant lines.
- *  4. Tag each entry current/non-current per `isCurrent`.
- *  5. For each file that yielded ≥1 token event (a real assistant transcript —
+ *  3. Read the tail (`config.tailBytes`) of each and parse assistant lines, tagging
+ *     every entry with the file's session (`sessionOrigin(path).session`).
+ *  4. For each file that yielded ≥1 token event (a real assistant transcript —
  *     excludes journal.jsonl etc.), record a FileActivity (session, subagent,
  *     mtime) for the ⭐️ live counts.
  *
- * Never throws: unreadable files / dirs are skipped and yield nothing.
+ * Session-agnostic: it doesn't need to know which session is "current" — the caller
+ * matches its own session_id against the per-session rates. Never throws: unreadable
+ * files / dirs are skipped and yield nothing.
  */
 export const gatherEntries = async (
   config: Config,
-  transcriptPath: string | undefined,
-  sessionId: string | undefined,
   now: number,
 ): Promise<{ entries: TokenEntry[]; files: FileActivity[] }> => {
   const paths = await walkJsonl(config.projectsDir);
@@ -237,13 +224,14 @@ export const gatherEntries = async (
         const { mtimeMs } = await stat(path);
         if (now - mtimeMs > config.lookbackMs) return { entries: [], file: null };
 
+        const origin = sessionOrigin(path);
         const text = await readTail(path, config.tailBytes);
-        const entries = parseTranscriptText(text, isCurrent(path, transcriptPath, sessionId), {
+        const entries = parseTranscriptText(text, origin.session, {
           includeCache: config.includeCache,
           effectiveRate: config.effectiveRate,
         });
         // Only real assistant transcripts (≥1 token event) count as activity.
-        const file = entries.length > 0 ? { ...sessionOrigin(path), mtimeMs } : null;
+        const file = entries.length > 0 ? { ...origin, mtimeMs } : null;
         return { entries, file };
       } catch {
         return { entries: [], file: null };
