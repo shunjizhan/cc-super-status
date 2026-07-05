@@ -28,8 +28,13 @@ const bool = (v: string | undefined, fallback: boolean): boolean => {
   return !/^(0|false|no|off)$/i.test(t);
 };
 
-/** Resolve the full runtime config from an environment map. */
-export const parseConfig = (env: Env): Config => {
+/**
+ * Resolve the full runtime config from an environment map. `barScale` scales the
+ * default ⚡ bar width to the account's plan tier (see src/plan.ts): the impure shell
+ * passes `planBarScale(detectRateLimitTier())` (Max 20x → 4), and an explicit
+ * `CCSS_CELLS` still overrides it. Defaults to 1 so `parseConfig(env)` alone is unchanged.
+ */
+export const parseConfig = (env: Env, barScale = 1): Config => {
   const windowSec = num(env.CCSS_WINDOW, 120);
   const activeWindowSec = num(env.CCSS_ACTIVE_WINDOW, 15);
 
@@ -40,7 +45,7 @@ export const parseConfig = (env: Env): Config => {
     includeCache: bool(env.CCSS_CACHE, true),
     effectiveRate: bool(env.CCSS_EFFECTIVE, true),
     showWeekly: bool(env.CCSS_WEEKLY, false),
-    cells: 10,
+    cells: num(env.CCSS_CELLS, Math.round(10 * barScale)),
     ccusageRefreshSec: num(env.CCSS_CCUSAGE_REFRESH, 30),
     // Cover BOTH transcript consumers: the rate needs files within windowSec, the live
     // counts within activeWindowSec. Use the larger (+60s buffer) so a file fresh for

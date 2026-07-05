@@ -102,9 +102,17 @@ export const sevenDayLane = (usedPercentage: number, resetsAtSec: number, now: n
   timeLeft: formatWeeklyDuration(resetsAtSec * 1000 - now),
 });
 
-/** Render one window: "<timeLeft> <pct>% <bar>", with the "<pct>% <bar>" tail colour-coded. */
-const renderLane = (lane: QuotaLane, cells: number): string =>
-  `${lane.timeLeft} ${truecolor(`${lane.pct}% ${renderBar(lane.pct, cells)}`, quotaRgb(lane.pct))}`;
+/**
+ * Render one window: "<timeLeft> <pct>% <bar>", with the "<pct>% <bar>" tail colour-coded.
+ * Each cell is a fixed 10% increment, so a scaled bar counts down from a proportionally
+ * higher max — 40 cells (Max 20x / max mode) → 0–400%. The bar fill and the red/amber/green
+ * colour stay keyed on the true 0–100 remaining fraction (equivalently, the thresholds scale
+ * with the bar), so a low-quota warning still fires at the right moment, not 4× too late.
+ */
+const renderLane = (lane: QuotaLane, cells: number): string => {
+  const shownPct = Math.round((lane.pct * cells) / 10);
+  return `${lane.timeLeft} ${truecolor(`${shownPct}% ${renderBar(lane.pct, cells)}`, quotaRgb(lane.pct))}`;
+};
 
 /**
  * Render the whole ⚡ segment: one solid bar per present window, space-separated

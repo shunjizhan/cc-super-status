@@ -196,7 +196,13 @@ export interface Config {
    * the ⚡ segment is just the 5-hour bar.
    */
   showWeekly: boolean;
-  /** quota bar width in cells (default 10). */
+  /**
+   * ⚡ quota bar width in cells. Precedence: explicit env CCSS_CELLS wins; else
+   * CCSS_BAR_MODE (max → 40, default → 10) sets it; else it auto-scales to the account's
+   * plan tier (Max 20x → 40; 5x / Team / Pro / unknown → 10), detected from ~/.claude.json
+   * in the impure shell (see src/plan.ts). Each cell is a fixed 10%, so the displayed
+   * quota max is cells×10 — a 40-cell bar counts down from 400% (see renderLane).
+   */
   cells: number;
   /**
    * How stale the shared ccusage line may get before a leader spawns a fresh

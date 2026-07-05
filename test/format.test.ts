@@ -249,3 +249,28 @@ describe('formatQuotaSegment', () => {
     expect(formatQuotaSegment(null, null, 10)).toBe('');
   });
 });
+
+describe('formatQuotaSegment — percentage scaling (10% per cell)', () => {
+  test('default 10-cell bar counts from 100% (unchanged)', () => {
+    const colored = truecolor(`60% ${renderBar(60, 10)}`, quotaRgb(60));
+    expect(formatQuotaSegment({ pct: 60, timeLeft: '1h' }, null, 10)).toBe(`⚡ 1h ${colored}`);
+  });
+
+  test('40-cell bar (Max 20x / max mode) counts from 400% at full', () => {
+    // pct=100 remaining → shown 400%, all 40 cells filled, green.
+    const colored = truecolor(`400% ${renderBar(100, 40)}`, quotaRgb(100));
+    expect(formatQuotaSegment({ pct: 100, timeLeft: '4h' }, null, 40)).toBe(`⚡ 4h ${colored}`);
+  });
+
+  test('the number scales, but colour + fill stay keyed on the true fraction (low = red)', () => {
+    // pct=15 (85% used) → shown 60%, yet RED (15 < 20) with only 6/40 cells filled.
+    const colored = truecolor(`60% ${renderBar(15, 40)}`, quotaRgb(15));
+    expect(formatQuotaSegment({ pct: 15, timeLeft: '10m' }, null, 40)).toBe(`⚡ 10m ${colored}`);
+    expect(quotaRgb(15)).toEqual([255, 85, 85]); // guard: still red, not softened by the 60% display
+  });
+
+  test('half-remaining on a 40-cell bar → 200%, 20 cells', () => {
+    const colored = truecolor(`200% ${renderBar(50, 40)}`, quotaRgb(50));
+    expect(formatQuotaSegment({ pct: 50, timeLeft: '2h' }, null, 40)).toBe(`⚡ 2h ${colored}`);
+  });
+});

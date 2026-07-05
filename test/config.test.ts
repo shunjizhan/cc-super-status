@@ -46,6 +46,27 @@ describe('parseConfig — num()', () => {
   });
 });
 
+describe('parseConfig — cells / plan bar scale', () => {
+  test('default is 10 cells (baseline scale)', () => {
+    expect(parseConfig({ HOME }).cells).toBe(10);
+  });
+
+  test('barScale scales the default (Max 20x → 4× → 40 cells)', () => {
+    expect(parseConfig({ HOME }, 4).cells).toBe(40);
+    expect(parseConfig({ HOME }, 1).cells).toBe(10);
+  });
+
+  test('explicit CCSS_CELLS always wins over the plan scale', () => {
+    expect(parseConfig({ HOME, CCSS_CELLS: '25' }, 4).cells).toBe(25);
+    expect(parseConfig({ HOME, CCSS_CELLS: '80' }).cells).toBe(80);
+  });
+
+  test('invalid CCSS_CELLS (zero / non-numeric) falls back to the scaled default', () => {
+    expect(parseConfig({ HOME, CCSS_CELLS: '0' }, 4).cells).toBe(40);
+    expect(parseConfig({ HOME, CCSS_CELLS: 'abc' }, 4).cells).toBe(40);
+  });
+});
+
 describe('parseConfig — bool()', () => {
   test('falsy words (any case) turn a default-on flag off', () => {
     for (const v of ['0', 'false', 'no', 'off', 'FALSE', 'Off', ' no ']) {

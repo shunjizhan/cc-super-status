@@ -8,6 +8,7 @@
 
 import type { SharedSnapshot, StatuslineInput } from './src/types';
 import { parseConfig } from './src/config';
+import { barScaleForMode, detectRateLimitTier } from './src/plan';
 import { resolveSnapshot } from './src/shared';
 import { buildStatusline } from './src/buildStatusline';
 
@@ -22,7 +23,11 @@ const main = async (): Promise<void> => {
   }
 
   const now = Date.now();
-  const config = parseConfig(process.env);
+  // ⚡ bar width: CCSS_BAR_MODE (max/default/auto) picks the scale, else it auto-detects
+  // from the plan tier in ~/.claude.json (Max 20x → 4×); an explicit CCSS_CELLS overrides
+  // both. Render-only (cfgKey excludes cells), so this per-pane read never fragments the
+  // shared snapshot. See src/plan.ts.
+  const config = parseConfig(process.env, barScaleForMode(process.env.CCSS_BAR_MODE, detectRateLimitTier()));
 
   let shared: SharedSnapshot | undefined;
   try {
