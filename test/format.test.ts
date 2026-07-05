@@ -17,28 +17,52 @@ import {
 describe('formatModel', () => {
   test('display name with 1M context + xhigh → ultracode', () => {
     expect(formatModel('Opus 4.8 (1M context)', 'claude-opus-4-8[1m]', 'xhigh')).toBe(
-      '🤖 Opus 4.8-1m (ultracode)',
+      '🥷 Opus 4.8-1m (ultracode)',
     );
   });
 
   test('high effort passes through', () => {
     expect(formatModel('Opus 4.8 (1M context)', 'claude-opus-4-8[1m]', 'high')).toBe(
-      '🤖 Opus 4.8-1m (high)',
+      '🥷 Opus 4.8-1m (high)',
     );
   });
 
   test('undefined effort omits the suffix', () => {
     expect(formatModel('Opus 4.8 (1M context)', 'claude-opus-4-8[1m]', undefined)).toBe(
-      '🤖 Opus 4.8-1m',
+      '🥷 Opus 4.8-1m',
     );
   });
 
-  test('falls back to modelId when displayName is undefined', () => {
+  test('falls back to modelId when displayName is undefined (unknown model → default 🤖)', () => {
     expect(formatModel(undefined, 'claude-x', undefined)).toBe('🤖 claude-x');
   });
 
   test('falls back to ? when both name sources are undefined', () => {
     expect(formatModel(undefined, undefined, undefined)).toBe('🤖 ?');
+  });
+});
+
+describe('formatModel — per-model emoji', () => {
+  test('Fable → 🐉 dragon', () => {
+    expect(formatModel('Fable 5', 'claude-fable-5', 'xhigh')).toBe('🐉 Fable 5 (ultracode)');
+  });
+
+  test('Opus → 🥷 ninja', () => {
+    expect(formatModel('Opus 4.8 (1M context)', 'claude-opus-4-8[1m]', 'high')).toBe(
+      '🥷 Opus 4.8-1m (high)',
+    );
+  });
+
+  test('Sonnet → 🐱 cat', () => {
+    expect(formatModel('Sonnet 5', 'claude-sonnet-5', undefined)).toBe('🐱 Sonnet 5');
+  });
+
+  test('Haiku and other models keep the default 🤖', () => {
+    expect(formatModel('Haiku 4.5', 'claude-haiku-4-5-20251001', 'high')).toBe('🤖 Haiku 4.5 (high)');
+  });
+
+  test('family is detected from the id even when the display name is absent', () => {
+    expect(formatModel(undefined, 'claude-sonnet-5', undefined)).toBe('🐱 claude-sonnet-5');
   });
 });
 

@@ -7,9 +7,23 @@ import type { ActiveCounts, QuotaLane, Rates } from './types';
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n));
 
 /**
- * Render the 🤖 model segment.
- * name = displayName ?? modelId ?? '?', with ' (1M context)' collapsed to '-1m';
- * effort 'xhigh' is shown as 'ultracode'; omitted entirely when absent.
+ * Per-model emoji for the model segment, matched on the display name or id:
+ * Fable → 🐉, Opus → 🥷, Sonnet → 🐱. Any other model (Haiku, unknown) keeps the
+ * default 🤖.
+ */
+const modelEmoji = (displayName: string | undefined, modelId: string | undefined): string => {
+  const hay = `${displayName ?? ''} ${modelId ?? ''}`.toLowerCase();
+  if (hay.includes('fable')) return '🐉';
+  if (hay.includes('opus')) return '🥷';
+  if (hay.includes('sonnet')) return '🐱';
+  return '🤖';
+};
+
+/**
+ * Render the model segment, e.g. `🥷 Opus 4.8-1m (ultracode)`.
+ * Emoji is per-model (see `modelEmoji`); name = displayName ?? modelId ?? '?', with
+ * ' (1M context)' collapsed to '-1m'; effort 'xhigh' is shown as 'ultracode', omitted
+ * entirely when absent.
  */
 export const formatModel = (
   displayName: string | undefined,
@@ -18,7 +32,7 @@ export const formatModel = (
 ): string => {
   const name = (displayName ?? modelId ?? '?').replace(' (1M context)', '-1m');
   const effort = effortLevel === 'xhigh' ? 'ultracode' : effortLevel;
-  return `🤖 ${name}` + (effort ? ` (${effort})` : '');
+  return `${modelEmoji(displayName, modelId)} ${name}` + (effort ? ` (${effort})` : '');
 };
 
 /**

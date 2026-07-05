@@ -155,7 +155,7 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
     const shared = await snapshotOf(config, null, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config });
     const expected =
-      '🤖 Opus 4.8-1m (ultracode)' +
+      '🥷 Opus 4.8-1m (ultracode)' +
       ' | 🔥 $13.18/hr' +
       ' | ⭐️ {163}322t/s 2[1]' +
       ' | 💰 $13.5 / $31 / $330' +
@@ -176,7 +176,7 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
     const shared = await snapshotOf(raw, null, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config: raw });
     const expected =
-      '🤖 Opus 4.8-1m (ultracode)' +
+      '🥷 Opus 4.8-1m (ultracode)' +
       ' | 🔥 $13.18/hr' +
       ' | 🌟 {200}350t/s 2[1]' +
       ' | 💰 $13.5 / $31 / $330' +
@@ -232,7 +232,7 @@ describe('e2e: buildStatusline with merged rate limits', () => {
     const shared = await snapshotOf(weekly, { five_hour: FIVE_HOUR, seven_day: SEVEN_DAY }, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config: weekly });
     const expected =
-      '🤖 Fable 5 (ultracode)' +
+      '🐉 Fable 5 (ultracode)' +
       ' | 🔥 $13.18/hr' +
       ' | ⭐️ {163}322t/s 2[1]' +
       ' | 💰 $13.5 / $31 / $330' +
@@ -244,7 +244,7 @@ describe('e2e: buildStatusline with merged rate limits', () => {
     const shared = await snapshotOf(weekly, { five_hour: FIVE_HOUR, seven_day: SEVEN_DAY }, null);
     const actual = buildStatusline({ input, shared, now: NOW, config: weekly });
     expect(actual).toBe(
-      `🤖 Fable 5 (ultracode) | ⭐️ {163}322t/s 2[1] | ${twoBars(60, '1h 5m', 20, '3d 2h')}`,
+      `🐉 Fable 5 (ultracode) | ⭐️ {163}322t/s 2[1] | ${twoBars(60, '1h 5m', 20, '3d 2h')}`,
     );
   });
 
