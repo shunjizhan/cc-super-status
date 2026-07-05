@@ -45,38 +45,38 @@ describe('formatModel', () => {
 describe('formatSpeed', () => {
   const NONE = { sessions: 0, subagents: 0 };
 
-  test('nothing active → no suffix (idle 0/0)', () => {
-    expect(formatSpeed({ cur: 0, all: 0 }, NONE, true)).toBe('⭐️ 0t/s');
+  test('idle → suffix always shown as 0[0] (never blinks out)', () => {
+    expect(formatSpeed({ cur: 0, all: 0 }, NONE, true)).toBe('⭐️ 0t/s 0[0]');
   });
 
   test('collapses when cur === all (5/5) and appends the live counts', () => {
-    expect(formatSpeed({ cur: 5, all: 5 }, { sessions: 1, subagents: 0 }, true)).toBe('⭐️ 5t/s 1=>0');
+    expect(formatSpeed({ cur: 5, all: 5 }, { sessions: 1, subagents: 0 }, true)).toBe('⭐️ 5t/s 1[0]');
   });
 
   test('uses braces when cur !== all and appends the counts (the canonical example)', () => {
     expect(formatSpeed({ cur: 100, all: 5470 }, { sessions: 5, subagents: 10 }, true)).toBe(
-      '⭐️ {100}5470t/s 5=>10',
+      '⭐️ {100}5470t/s 5[10]',
     );
   });
 
-  test('solo work with a sub-agent → 1=>1', () => {
-    expect(formatSpeed({ cur: 5, all: 5 }, { sessions: 1, subagents: 1 }, true)).toBe('⭐️ 5t/s 1=>1');
+  test('solo work with a sub-agent → 1[1]', () => {
+    expect(formatSpeed({ cur: 5, all: 5 }, { sessions: 1, subagents: 1 }, true)).toBe('⭐️ 5t/s 1[1]');
   });
 
   test('counts are decoupled from the rate: live agents show even when the rate rounds to 0', () => {
     // The counts track file mtimes, not throughput — so a just-touched session
     // still shows while its per-second rate rounds down to 0 (the point of the split).
-    expect(formatSpeed({ cur: 0, all: 0 }, { sessions: 2, subagents: 3 }, true)).toBe('⭐️ 0t/s 2=>3');
+    expect(formatSpeed({ cur: 0, all: 0 }, { sessions: 2, subagents: 3 }, true)).toBe('⭐️ 0t/s 2[3]');
   });
 
-  test('suffix is suppressed only when no session is active', () => {
-    expect(formatSpeed({ cur: 300, all: 300 }, NONE, true)).toBe('⭐️ 300t/s');
+  test('the suffix is unconditional — a busy rate with nothing live still reads 0[0]', () => {
+    expect(formatSpeed({ cur: 300, all: 300 }, NONE, true)).toBe('⭐️ 300t/s 0[0]');
   });
 
   test('raw mode (effectiveRate=false) uses 🌟 instead of ⭐️', () => {
-    expect(formatSpeed({ cur: 0, all: 0 }, NONE, false)).toBe('🌟 0t/s');
+    expect(formatSpeed({ cur: 0, all: 0 }, NONE, false)).toBe('🌟 0t/s 0[0]');
     expect(formatSpeed({ cur: 50, all: 300 }, { sessions: 5, subagents: 10 }, false)).toBe(
-      '🌟 {50}300t/s 5=>10',
+      '🌟 {50}300t/s 5[10]',
     );
   });
 });

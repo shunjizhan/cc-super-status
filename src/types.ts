@@ -1,7 +1,7 @@
 // cc-super-status — shared contract. Every module implements against these types.
 //
 // Final status line (segments joined by " | "):
-//   🤖 <model>-1m (<effort>) | 🔥 <burn> | ⭐️ {<cur>}<all>t/s <sessions>=><subagents> | 💰 $<session> / $<block> / $<today> | ⚡ <5hTime> <5h%> <bar> <7dTime> <7d%> <bar>
+//   🤖 <model>-1m (<effort>) | 🔥 <burn> | ⭐️ {<cur>}<all>t/s <sessions>[<subagents>] | 💰 $<session> / $<block> / $<today> | ⚡ <5hTime> <5h%> <bar> <7dTime> <7d%> <bar>
 //
 // Data flows on three clocks (see README "Multi-session architecture"), each sized to
 // what its data costs, so no render ever waits on something slow:
@@ -142,7 +142,7 @@ export interface SharedSnapshot {
   all: number;
   /** per-session per-second rate; a pane's `cur` is `bySession[session_id] ?? 0`. */
   bySession: Record<string, number>;
-  /** active session / sub-agent counts (the ⭐️ `N=>M` suffix), frozen at `asOf`. */
+  /** active session / sub-agent counts (the ⭐️ `N[M]` suffix), frozen at `asOf`. */
   counts: ActiveCounts;
   /** merged rate-limit windows for the ⚡ bars, or null when no session has any. */
   limits: MergedRateLimits | null;
@@ -173,7 +173,7 @@ export interface Config {
   /**
    * Active-count freshness window in seconds (env CCSS_ACTIVE_WINDOW, default 15).
    * A transcript touched within this many seconds counts toward the ⭐️
-   * `<sessions>=><subagents>` suffix. Independent of `windowSec` — this tracks
+   * `<sessions>[<subagents>]` suffix. Independent of `windowSec` — this tracks
    * live work (file mtime), not token throughput.
    */
   activeWindowSec: number;

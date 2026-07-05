@@ -25,17 +25,17 @@ export const formatModel = (
  * Render the token-rate segment, collapsing when cur === all.
  * Star marks the mode: ⭐️ when charge-weighted (effective), 🌟 when raw.
  *
- * When at least one session is active *right now*, the live count of sessions and
- * sub-agents is appended as `<sessions>=><subagents>` (e.g. `⭐️ {100}5470t/s 5=>10`).
- * The counts come from transcript mtimes (a short freshness window), decoupled from
- * the token-rate window — so they drop promptly when work stops, and no suffix is
- * shown once nothing is live.
+ * The live count of sessions and sub-agents working *right now* is always appended as
+ * `<sessions>[<subagents>]` (e.g. `⭐️ {100}5470t/s 5[10]`, solo `⭐️ 5t/s 1[0]`). The
+ * counts come from transcript mtimes (a short freshness window), decoupled from the
+ * token-rate window — so they track live work. The suffix renders unconditionally
+ * (idle shows `0[0]`), so the segment never blinks out from under the following ` | `:
+ * the numbers ride down to 0 rather than the whole suffix appearing and disappearing.
  */
 export const formatSpeed = (rates: Rates, counts: ActiveCounts, effectiveRate: boolean): string => {
   const star = effectiveRate ? '⭐️' : '🌟';
   const rate = rates.cur === rates.all ? `${rates.all}t/s` : `{${rates.cur}}${rates.all}t/s`;
-  const suffix = counts.sessions > 0 ? ` ${counts.sessions}=>${counts.subagents}` : '';
-  return `${star} ${rate}${suffix}`;
+  return `${star} ${rate} ${counts.sessions}[${counts.subagents}]`;
 };
 
 /** Render a progress bar of `cells` width filled proportionally to `pct` (0–100). */

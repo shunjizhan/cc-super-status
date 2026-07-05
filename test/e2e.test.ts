@@ -44,7 +44,7 @@ import { quotaRgb, renderBar, truecolor } from '../src/format';
 // (not the fixture NOW), the render tests inject a deterministic FILES fixture into the
 // snapshot rather than depend on when the fixtures were last touched. All three touched
 // just before NOW → countActive gives sessions = { sessCUR, sessOTHER } = 2,
-// subagents = { …/agent-x } = 1 → "2=>1".
+// subagents = { …/agent-x } = 1 → "2[1]".
 // ──────────────────────────────────────────────────────────────────────────
 
 const NOW = 1_780_228_920_000;
@@ -66,7 +66,7 @@ const config: Config = {
   projectsDir: PROJECTS_DIR,
 };
 
-// Deterministic activity fixture for the render tests → countActive gives 2=>1.
+// Deterministic activity fixture for the render tests → countActive gives 2[1].
 const FILES: FileActivity[] = [
   { session: 'sessCUR', subagent: null, mtimeMs: NOW - 1000 },
   { session: 'sessCUR', subagent: `${PROJECTS_DIR}/enc-cur/sessCUR/subagents/agent-x.jsonl`, mtimeMs: NOW - 1000 },
@@ -151,13 +151,13 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
     return buildSnapshot(entries, FILES, NOW, cfg, limits, line);
   };
 
-  test('effective default (no first-party limits) → ⭐️ {163}322t/s 2=>1, ⚡ from ccusage estimate', async () => {
+  test('effective default (no first-party limits) → ⭐️ {163}322t/s 2[1], ⚡ from ccusage estimate', async () => {
     const shared = await snapshotOf(config, null, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config });
     const expected =
       '🤖 Opus 4.8-1m (ultracode)' +
       ' | 🔥 $13.18/hr' +
-      ' | ⭐️ {163}322t/s 2=>1' +
+      ' | ⭐️ {163}322t/s 2[1]' +
       ' | 💰 $13.5 / $31 / $330' +
       ` | ⚡ 2h 35m ${quotaColored}`;
     expect(actual).toBe(expected);
@@ -171,26 +171,26 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
     expect(actual).toContain('💰 $42.4 / $31 / $330');
   });
 
-  test('raw mode (CCSS_EFFECTIVE=0) → 🌟 {200}350t/s 2=>1', async () => {
+  test('raw mode (CCSS_EFFECTIVE=0) → 🌟 {200}350t/s 2[1]', async () => {
     const raw: Config = { ...config, effectiveRate: false };
     const shared = await snapshotOf(raw, null, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config: raw });
     const expected =
       '🤖 Opus 4.8-1m (ultracode)' +
       ' | 🔥 $13.18/hr' +
-      ' | 🌟 {200}350t/s 2=>1' +
+      ' | 🌟 {200}350t/s 2[1]' +
       ' | 💰 $13.5 / $31 / $330' +
       ` | ⚡ 2h 35m ${quotaColored}`;
     expect(actual).toBe(expected);
   });
 
-  test('stale activity (no fresh files) → rate still renders, but no session/sub-agent suffix', async () => {
+  test('stale activity (no fresh files) → rate still renders, counts ride down to 0[0] (no blink-out)', async () => {
     const stale: FileActivity[] = FILES.map((f) => ({ ...f, mtimeMs: NOW - 60_000 }));
     const { entries } = await gatherEntries(config, NOW);
     const shared = buildSnapshot(entries, stale, NOW, config, null, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config });
-    expect(actual).toContain('⭐️ {163}322t/s |'); // rate present, no "N=>M" before the pipe
-    expect(actual).not.toContain('=>');
+    // The suffix is unconditional: idle shows 0[0] rather than the segment vanishing.
+    expect(actual).toContain('⭐️ {163}322t/s 0[0] |');
   });
 
   test('a follower with no throughput of its own shows cur 0 against the shared all', async () => {
@@ -198,7 +198,7 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
     const other: StatuslineInput = { ...input, session_id: 'sessBRANDNEW' };
     const shared = await snapshotOf(config, null, ccusageLine);
     const actual = buildStatusline({ input: other, shared, now: NOW, config });
-    expect(actual).toContain('⭐️ {0}322t/s 2=>1');
+    expect(actual).toContain('⭐️ {0}322t/s 2[1]');
   });
 });
 
@@ -234,7 +234,7 @@ describe('e2e: buildStatusline with merged rate limits', () => {
     const expected =
       '🤖 Fable 5 (ultracode)' +
       ' | 🔥 $13.18/hr' +
-      ' | ⭐️ {163}322t/s 2=>1' +
+      ' | ⭐️ {163}322t/s 2[1]' +
       ' | 💰 $13.5 / $31 / $330' +
       ` | ${twoBars(60, '1h 5m', 20, '3d 2h')}`;
     expect(actual).toBe(expected);
@@ -244,7 +244,7 @@ describe('e2e: buildStatusline with merged rate limits', () => {
     const shared = await snapshotOf(weekly, { five_hour: FIVE_HOUR, seven_day: SEVEN_DAY }, null);
     const actual = buildStatusline({ input, shared, now: NOW, config: weekly });
     expect(actual).toBe(
-      `🤖 Fable 5 (ultracode) | ⭐️ {163}322t/s 2=>1 | ${twoBars(60, '1h 5m', 20, '3d 2h')}`,
+      `🤖 Fable 5 (ultracode) | ⭐️ {163}322t/s 2[1] | ${twoBars(60, '1h 5m', 20, '3d 2h')}`,
     );
   });
 
@@ -272,7 +272,7 @@ describe('e2e: buildStatusline with merged rate limits', () => {
 });
 
 describe('e2e: idle', () => {
-  test('10 minutes past last activity → all 0, no fresh files → "⭐️ 0t/s"', async () => {
+  test('10 minutes past last activity → all 0, no fresh files → "⭐️ 0t/s 0[0]"', async () => {
     const idleNow = NOW + 10 * 60 * 1000;
     const { entries } = await gatherEntries(config, idleNow);
     expect(computeRatesBySession(entries, idleNow, config.windowSec * 1000)).toEqual({
@@ -285,6 +285,7 @@ describe('e2e: idle', () => {
     const stale: FileActivity[] = FILES.map((f) => ({ ...f, mtimeMs: NOW }));
     const counts = countActive(stale, idleNow, config.activeWindowSec * 1000);
     expect(counts).toEqual({ sessions: 0, subagents: 0 });
-    expect(formatSpeed({ cur: 0, all: 0 }, counts, config.effectiveRate)).toBe('⭐️ 0t/s');
+    // Suffix is unconditional: fully idle renders 0[0], not an empty suffix.
+    expect(formatSpeed({ cur: 0, all: 0 }, counts, config.effectiveRate)).toBe('⭐️ 0t/s 0[0]');
   });
 });
