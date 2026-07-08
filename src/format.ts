@@ -6,10 +6,6 @@ import type { ActiveCounts, QuotaLane, Rates } from './types';
 /** Clamp `n` into the inclusive range [lo, hi]. */
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n));
 
-/** True when two RGB triples are identical — used to coalesce equal-colour cells into one run. */
-const eqRgb = (a: [number, number, number], b: [number, number, number]): boolean =>
-  a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
-
 /**
  * Per-model emoji for the model segment, matched on the display name or id:
  * Fable → 🐉, Opus → 🥷, Sonnet → 🐱. Any other model (Haiku, unknown) keeps the
@@ -84,10 +80,10 @@ const AURORA: [number, number, number][] = [
 ];
 
 /**
- * Neutral gray track for the bar's consumed cells (every cell past the frontier). A spent reserve
- * is spent, so its zone hue isn't kept — a plain muted gray both reads clearly as "empty" and keeps
- * the dimmed frontier legible against it. Mid-gray reads as an empty track on a light terminal (a
- * darker slate looked black there) and stays recessive on a dark one.
+ * Neutral gray track for the base layer's consumed cells — nothing lies beneath the base to
+ * reveal, so it's a plain muted gray rather than a peek at a lower layer. Mid-gray reads clearly
+ * as an empty track on a light terminal (a darker slate looked black there) and stays recessive
+ * on a dark one.
  */
 export const DIM: [number, number, number] = [160, 160, 160];
 
@@ -103,9 +99,10 @@ export const layerColor = (n: number, baseRemainingPct: number): [number, number
   n <= 1 ? quotaRgb(baseRemainingPct) : AURORA[Math.min(n - 2, AURORA.length - 1)];
 
 /**
- * Mute a colour: desaturate 35% toward its own luma, then darken to 60%. Used for the FRONTIER
- * cell — the fill dimmed, so the cell being consumed right now reads as half-spent, sitting
- * between the bright held cells and the gray consumed track.
+ * Mute a colour: desaturate 35% toward its own luma, then darken to 60%. Used two ways — for the
+ * FRONTIER cell (the fill dimmed, so the cell being consumed reads as half-spent, between the
+ * solid fill and the empty track) and for the consumed track's beneath-layer underlay (which
+ * recedes, its hue surviving enough to still say which layer is coming next).
  */
 export const dimColor = ([r, g, b]: [number, number, number]): [number, number, number] => {
   const luma = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -168,55 +165,50 @@ export const sevenDayLane = (usedPercentage: number, resetsAtSec: number, now: n
 });
 
 /**
- * Render one window as "<timeLeft> <pct>% <bar>" — a fighting-game layered health bar drawn in
- * FULL. The bar is `cells × layers` wide, one contiguous `cells`-wide colour zone per layer laid
- * out left → right: the emerald base first, then the static Aurora surplus layers (cyan → blue →
- * violet). So the whole quota is on screen at once — a Max 20x plan (4 layers × 20 cells) is 80
- * cells, a 1-layer plan is just `cells` cells.
- *   - displayPct = pct × layers (0 → layers×100) is the number shown (a full window reads
- *     layers×100%, e.g. 400% on Max 20x; consuming a whole layer drops it a clean 100);
- *   - `filled = floor((pct/100) × totalCells)` cells are FULLY HELD, from the left, each in its
- *     own layer zone's colour. The single cell at index `filled` is the FRONTIER — the one being
- *     consumed right now — a dimmed shade of its zone (`dimColor`); it shows until the bar is
- *     100% full (`filled === totalCells`). Every cell past it is the CONSUMED track, a neutral
- *     gray `DIM` — a spent reserve is spent, so its hue isn't kept (which also keeps the dim
- *     frontier legible against it). As you burn quota the frontier walks LEFT through the zones;
- *     the still-held zones to its left stay bright, so you read each surviving reserve at a glance.
- *   - the base zone keeps the emerald→amber→red danger gradient on the base's OWN remaining %
- *     (`quotaRgb(min(displayPct, 100))`), so a nearly-empty final reserve still warns even while
- *     the surplus layers are full. A 1-layer plan is exactly this bar with a single emerald zone —
- *     byte-identical to before, a dim frontier over a dim gray track.
- * The %-label takes the current (top-most) layer's colour, so the number's hue echoes the bar.
- * Adjacent same-colour cells are coalesced into one truecolor run, so even an 80-cell bar emits
- * only a handful of escape sequences.
+ * Render one window as "<timeLeft> <pct>% <bar>" — a fighting-game layered bar. The bar is
+ * a fixed `cells` wide and shows only the CURRENT layer; `layers` (the plan multiple) sets
+ * both the displayed max and the stack depth:
+ *   - displayPct = pct × layers (0 → layers×100) is the number shown (100% remaining on a
+ *     4-layer plan reads 400%, and consuming one layer drops it to 300%);
+ *   - the bar splits into three runs. `solid = floor(fraction × cells)` cells are FULLY HELD,
+ *     drawn in the current layer's colour. The next single cell is the FRONTIER — the one being
+ *     consumed right now — drawn as a dimmed shade of the fill (`dimColor`); it shows until the
+ *     layer is 100% full (solid === cells). The rest is the CONSUMED track: the layer beneath
+ *     muted (`dimColor`) on a surplus layer, or the neutral gray `DIM` on the base. A cell turns
+ *     solid only once fully held, so the frontier sits one cell past the solid run (a 20-cell
+ *     base: 95% → 19 solid + 1 dim frontier + 0 empty; 90% → 18 + 1 + 1; 5% → 1 + 1 + 18; 100% → 20
+ *     solid, no frontier);
+ *   - the base layer keeps the emerald→amber→red danger gradient (see `layerColor`), so a
+ *     nearly-empty final reserve still warns. A 1-layer plan is a single such bar — the same
+ *     0–100% emerald/amber/red readout, a dim frontier over a dim gray track.
+ * The %-label takes the current layer's colour too, so the number's hue echoes the bar.
  */
 const renderLane = (lane: QuotaLane, cells: number, layers: number): string => {
-  const totalCells = cells * layers;
   const displayPct = lane.pct * layers; // 0 .. layers*100
-  const baseRemaining = clamp(displayPct, 0, 100); // the base layer's OWN remaining % → danger colour
-  const filled = clamp(Math.floor((lane.pct / 100) * totalCells), 0, totalCells); // cells fully held
+  const current = clamp(Math.ceil(displayPct / 100), 1, layers); // 1 = base … layers = top
+  const withinPct = clamp(displayPct - (current - 1) * 100, 0, 100); // remaining in this layer
+  // solid = cells FULLY HELD; the single FRONTIER cell is the one being consumed right now
+  // (dimmed); the rest is the consumed track. floor() means a cell turns solid only once fully
+  // held, so the frontier sits one cell past the solid run. It shows until the layer is 100% full.
+  const solid = clamp(Math.floor((withinPct / 100) * cells), 0, cells);
+  const hasFrontier = solid < cells;
+  const empty = cells - solid - (hasFrontier ? 1 : 0);
 
-  // Colour every cell by its layer zone and its state (held / frontier / consumed). `layerColor`
-  // gives the zone colour: the base (layer 1) runs the danger gradient on `baseRemaining`, the
-  // surplus layers are static Aurora (which ignore the second arg).
-  const cellRgb = (i: number): [number, number, number] => {
-    const zone = layerColor(Math.floor(i / cells) + 1, baseRemaining); // 1 = base … layers = top
-    if (i < filled) return zone; // held
-    if (i === filled) return dimColor(zone); // frontier — the cell being consumed right now
-    return DIM; // consumed track (neutral gray)
-  };
-  // Coalesce runs of equal colour so we emit one escape per run, not one per cell.
-  let bar = '';
-  for (let i = 0; i < totalCells; ) {
-    const rgb = cellRgb(i);
-    let j = i + 1;
-    while (j < totalCells && eqRgb(cellRgb(j), rgb)) j++;
-    bar += truecolor('▰'.repeat(j - i), rgb);
-    i = j;
-  }
+  const fillRgb = layerColor(current, withinPct);
+  // The consumed track reveals the layer directly beneath, muted (dimColor) so it recedes; the
+  // base has nothing beneath, so its consumed cells are the neutral gray DIM.
+  const hasBeneath = current > 1;
+  const emptyRgb = hasBeneath ? dimColor(layerColor(current - 1, 100)) : DIM;
+  // Three runs, left → right, any zero-width one skipped so no stray colour escape:
+  //   1. the SOLID run — cells fully held, in the current layer's colour,
+  //   2. the FRONTIER — the single cell being consumed, a dimmed shade of the fill,
+  //   3. the consumed run — muted layer beneath, or the dim gray DIM on the base.
+  const bar =
+    (solid > 0 ? truecolor('▰'.repeat(solid), fillRgb) : '') +
+    (hasFrontier ? truecolor('▰', dimColor(fillRgb)) : '') +
+    (empty > 0 ? truecolor('▰'.repeat(empty), emptyRgb) : '');
 
-  const current = clamp(Math.ceil(displayPct / 100), 1, layers); // top-most layer → label colour
-  return `${lane.timeLeft} ${truecolor(`${Math.round(displayPct)}%`, layerColor(current, baseRemaining))} ${bar}`;
+  return `${lane.timeLeft} ${truecolor(`${Math.round(displayPct)}%`, fillRgb)} ${bar}`;
 };
 
 /**

@@ -47,13 +47,13 @@ describe('parseConfig — num()', () => {
   });
 });
 
-describe('parseConfig — cells (per-layer width) + layers (plan scale)', () => {
-  test('cells default is a flat 20 per layer, independent of the plan scale', () => {
+describe('parseConfig — cells (flat width) + layers (plan scale)', () => {
+  test('cells default is a flat 20, independent of the plan scale', () => {
     expect(parseConfig({ HOME }).cells).toBe(20);
-    expect(parseConfig({ HOME }, 4).cells).toBe(20); // per-layer width is flat; total = cells × layers
+    expect(parseConfig({ HOME }, 4).cells).toBe(20); // Max 20x adds layers, doesn't widen the bar
   });
 
-  test('barScale sets the layer count, so the full bar spans cells × layers (Max 20x → 4 layers)', () => {
+  test('barScale sets the layer count, not the width (Max 20x → 4 layers)', () => {
     expect(parseConfig({ HOME }).layers).toBe(1);
     expect(parseConfig({ HOME }, 1).layers).toBe(1);
     expect(parseConfig({ HOME }, 4).layers).toBe(4);

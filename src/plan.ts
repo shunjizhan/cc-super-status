@@ -4,7 +4,7 @@
 // percentages), so the tier is read from Claude Code's own local account cache:
 // ~/.claude.json → oauthAccount.{organization,user}RateLimitTier, e.g.
 // "default_claude_max_20x". That field is undocumented internal state, so we read it
-// defensively — any failure yields null and the caller keeps the default single-layer bar.
+// defensively — any failure yields null and the caller keeps the default 20-cell bar.
 
 import { readFileSync } from 'node:fs';
 

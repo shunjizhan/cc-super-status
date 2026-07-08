@@ -22,37 +22,31 @@ const CYAN: [number, number, number] = [34, 211, 238]; // surplus layer 2 (first
 const BLUE: [number, number, number] = [96, 165, 250]; // surplus layer 3
 const VIOLET: [number, number, number] = [167, 139, 250]; // surplus layer 4 (top of a Max 20x stack)
 const GREEN: [number, number, number] = [52, 211, 153]; // emerald base at full (quotaRgb ≥ 50)
-const AMBER: [number, number, number] = [244, 168, 54]; // base warning (quotaRgb 20–49)
 const RED: [number, number, number] = [239, 68, 68]; // base danger (quotaRgb < 20)
 
 /**
  * Expected rendered lane, built from the trusted primitives (`layerColor`/`dimColor`/`DIM` are
- * pinned to literals in their own specs). Mirrors `renderLane`: the FULL stacked bar, `cells ×
- * layers` wide, one `cells`-wide zone per layer. `filled = floor((pct/100) × totalCells)` cells
- * are fully held in their zone colour; the single cell at `filled` is the dim FRONTIER; every
- * cell past it is the neutral gray `DIM` consumed track. The base zone runs the danger gradient
- * on its own remaining % (`min(displayPct, 100)`). %-label = displayPct in the top-most layer's
- * colour. Adjacent same-colour cells coalesce into one run.
+ * pinned to literals in their own specs). Mirrors `renderLane`: `solid = floor(fraction × cells)`
+ * fully-held cells in the current layer's colour, then the single FRONTIER cell being consumed as
+ * a dimmed shade of the fill (`dimColor`), then the consumed track — the layer beneath muted, or
+ * the gray `DIM` on the base. %-label = displayPct in the current layer's colour. Zero-width runs
+ * are omitted.
  */
 const lane = (pct: number, timeLeft: string, cells: number, layers: number): string => {
-  const totalCells = cells * layers;
   const displayPct = pct * layers;
-  const baseRemaining = Math.max(0, Math.min(100, displayPct));
-  const filled = Math.min(Math.max(Math.floor((pct / 100) * totalCells), 0), totalCells);
-  const cellRgb = (i: number): [number, number, number] => {
-    const zone = layerColor(Math.floor(i / cells) + 1, baseRemaining);
-    return i < filled ? zone : i === filled ? dimColor(zone) : DIM;
-  };
-  let bar = '';
-  for (let i = 0; i < totalCells; ) {
-    const rgb = cellRgb(i);
-    let j = i + 1;
-    while (j < totalCells && cellRgb(j).every((c, k) => c === rgb[k])) j++;
-    bar += truecolor('▰'.repeat(j - i), rgb);
-    i = j;
-  }
   const current = Math.min(Math.max(Math.ceil(displayPct / 100), 1), layers);
-  return `${timeLeft} ${truecolor(`${Math.round(displayPct)}%`, layerColor(current, baseRemaining))} ${bar}`;
+  const withinPct = Math.max(0, Math.min(100, displayPct - (current - 1) * 100));
+  const solid = Math.min(Math.max(Math.floor((withinPct / 100) * cells), 0), cells);
+  const hasFrontier = solid < cells;
+  const empty = cells - solid - (hasFrontier ? 1 : 0);
+  const fillRgb = layerColor(current, withinPct);
+  const hasBeneath = current > 1;
+  const emptyRgb = hasBeneath ? dimColor(layerColor(current - 1, 100)) : DIM;
+  const bar =
+    (solid > 0 ? truecolor('▰'.repeat(solid), fillRgb) : '') +
+    (hasFrontier ? truecolor('▰', dimColor(fillRgb)) : '') +
+    (empty > 0 ? truecolor('▰'.repeat(empty), emptyRgb) : '');
+  return `${timeLeft} ${truecolor(`${Math.round(displayPct)}%`, fillRgb)} ${bar}`;
 };
 
 describe('formatModel', () => {
@@ -220,12 +214,12 @@ describe('layerColor', () => {
 describe('dimColor', () => {
   const luma = ([r, g, b]: number[]): number => 0.299 * r + 0.587 * g + 0.114 * b;
 
-  test('desaturates then darkens (the dimmed frontier shade)', () => {
-    expect(dimColor([52, 211, 153])).toEqual([53, 115, 93]); // emerald frontier
-    expect(dimColor([96, 165, 250])).toEqual([70, 97, 130]); // blue frontier
+  test('desaturates then darkens (the receding underlay)', () => {
+    expect(dimColor([52, 211, 153])).toEqual([53, 115, 93]); // emerald base beneath
+    expect(dimColor([96, 165, 250])).toEqual([70, 97, 130]); // blue beneath
   });
 
-  test('always darker than its source, so the frontier reads below the bright held fill', () => {
+  test('always darker than its source, so the beneath layer recedes', () => {
     for (const c of [CYAN, BLUE, VIOLET, GREEN] as [number, number, number][]) {
       expect(luma(dimColor(c))).toBeLessThan(luma(c));
     }
@@ -366,105 +360,64 @@ describe('formatQuotaSegment — fighting-game layered bar', () => {
     expect(formatQuotaSegment({ pct: 12, timeLeft: '10m' }, null, 10, 1)).toBe(`⚡ ${expected}`);
   });
 
-  // ── 4-layer plan (Max 20x): the FULL stacked bar, cells × layers wide, all zones on screen ──
-  // (These use cells=10 → 40-cell bars for readable literals; the 80-cell default is covered below.)
-  test('4 layers, byte-exact: full → 400%, all four zones solid (emerald|cyan|blue|violet), no frontier', () => {
-    // filled 40 → every cell held; four 10-cell zones, no frontier, no gray.
-    const expected =
-      `4h ${truecolor('400%', VIOLET)} ` +
-      `${truecolor('▰'.repeat(10), GREEN)}${truecolor('▰'.repeat(10), CYAN)}${truecolor('▰'.repeat(10), BLUE)}${truecolor('▰'.repeat(10), VIOLET)}`;
+  // ── 4-layer plan (Max 20x): stacked colour layers, displayed 400% → 0 ──
+  test('4 layers, byte-exact: full → 400%, all violet solid, no frontier, no beneath', () => {
+    // withinPct 100 → solid 10, layer full → no frontier.
+    const expected = `4h ${truecolor('400%', VIOLET)} ${truecolor('▰▰▰▰▰▰▰▰▰▰', VIOLET)}`;
     expect(formatQuotaSegment({ pct: 100, timeLeft: '4h' }, null, 10, 4)).toBe(`⚡ ${expected}`);
   });
 
-  test('4 layers: mid-top-layer → 350%, three zones full + 5 violet + dim-violet frontier + gray', () => {
-    // pct 87.5 → filled 35: base|cyan|blue full (30), 5 violet held, frontier at 35 (dim violet), 4 gray.
+  test('4 layers: mid-top-layer → 350%, 5 violet + dim-violet frontier over 4 muted blue', () => {
+    // pct 87.5 → displayPct 350 → layer 4 (violet), 50% within → 5 solid + frontier; beneath = dim blue.
     const expected =
       `4h ${truecolor('350%', VIOLET)} ` +
-      `${truecolor('▰'.repeat(10), GREEN)}${truecolor('▰'.repeat(10), CYAN)}${truecolor('▰'.repeat(10), BLUE)}` +
-      `${truecolor('▰'.repeat(5), VIOLET)}${truecolor('▰', dimColor(VIOLET))}${truecolor('▰'.repeat(4), DIM)}`;
+      `${truecolor('▰▰▰▰▰', VIOLET)}${truecolor('▰', dimColor(VIOLET))}${truecolor('▰▰▰▰', dimColor(BLUE))}`;
     expect(formatQuotaSegment({ pct: 87.5, timeLeft: '4h' }, null, 10, 4)).toBe(`⚡ ${expected}`);
   });
 
-  test('4 layers: exactly 300% → base|cyan|blue full, dim frontier at the violet-zone edge, gray tail', () => {
-    // pct 75 → filled 30 (exact layer boundary). The frontier sits at index 30, the first violet cell,
-    // so it's a dim-violet marker; the %-label takes the top FULL layer (blue) — the one boundary case
-    // where label colour (blue) and frontier zone (violet) differ. 9 gray follow.
-    const expected =
-      `4h ${truecolor('300%', BLUE)} ` +
-      `${truecolor('▰'.repeat(10), GREEN)}${truecolor('▰'.repeat(10), CYAN)}${truecolor('▰'.repeat(10), BLUE)}` +
-      `${truecolor('▰', dimColor(VIOLET))}${truecolor('▰'.repeat(9), DIM)}`;
+  test('4 layers: consuming a whole layer drops 400→300, all blue solid (layer full, flips colour)', () => {
+    // displayPct 300 → layer 3, withinPct 100 → solid 10, no frontier.
+    const expected = `4h ${truecolor('300%', BLUE)} ${truecolor('▰▰▰▰▰▰▰▰▰▰', BLUE)}`;
     expect(formatQuotaSegment({ pct: 75, timeLeft: '4h' }, null, 10, 4)).toBe(`⚡ ${expected}`);
   });
 
-  test('4 layers: into surplus → 200%, base + cyan full, dim-blue frontier, gray; base still emerald', () => {
-    // pct 50 → filled 20. baseRemaining = min(200,100) = 100 → base emerald (surplus present = safe).
+  test('4 layers: cyan layer (150%) → 5 cyan + dim-cyan frontier over 4 muted emerald-base', () => {
+    // pct 37.5 → displayPct 150 → layer 2 (cyan), 50% within → 5 solid + frontier; beneath = dim emerald base.
     const expected =
-      `4h ${truecolor('200%', CYAN)} ` +
-      `${truecolor('▰'.repeat(10), GREEN)}${truecolor('▰'.repeat(10), CYAN)}` +
-      `${truecolor('▰', dimColor(BLUE))}${truecolor('▰'.repeat(19), DIM)}`;
-    expect(formatQuotaSegment({ pct: 50, timeLeft: '4h' }, null, 10, 4)).toBe(`⚡ ${expected}`);
+      `4h ${truecolor('150%', CYAN)} ` +
+      `${truecolor('▰▰▰▰▰', CYAN)}${truecolor('▰', dimColor(CYAN))}${truecolor('▰▰▰▰', dimColor(GREEN))}`;
+    expect(formatQuotaSegment({ pct: 37.5, timeLeft: '4h' }, null, 10, 4)).toBe(`⚡ ${expected}`);
   });
 
-  test('4 layers: down into the base reserve → 100%, base full (emerald), dim-cyan frontier, gray', () => {
-    // pct 25 → filled 10 → whole base held; frontier at index 10 (first cyan cell); 29 gray.
-    const expected =
-      `4h ${truecolor('100%', GREEN)} ${truecolor('▰'.repeat(10), GREEN)}${truecolor('▰', dimColor(CYAN))}${truecolor('▰'.repeat(29), DIM)}`;
+  test('4 layers: down into the base reserve (100%) → all emerald solid, base full', () => {
+    // displayPct 100 → base, withinPct 100 → solid 10, no frontier; danger gradient resumes.
+    const expected = `4h ${truecolor('100%', GREEN)} ${truecolor('▰▰▰▰▰▰▰▰▰▰', GREEN)}`;
     expect(formatQuotaSegment({ pct: 25, timeLeft: '4h' }, null, 10, 4)).toBe(`⚡ ${expected}`);
   });
 
-  test('4 layers: base half-spent → 40%, amber held cells + dim-amber frontier fire the warning', () => {
-    // pct 10 → displayPct 40 → baseRemaining 40 → amber. filled 4 amber, dim-amber frontier, 35 gray.
-    const expected =
-      `3h ${truecolor('40%', AMBER)} ${truecolor('▰'.repeat(4), AMBER)}${truecolor('▰', dimColor(AMBER))}${truecolor('▰'.repeat(35), DIM)}`;
-    expect(formatQuotaSegment({ pct: 10, timeLeft: '3h' }, null, 10, 4)).toBe(`⚡ ${expected}`);
-  });
-
   test('4 layers: nearly-exhausted base → a lone dim-red frontier over the gray track', () => {
-    // pct 2 → displayPct 8 → baseRemaining 8 → red; filled 0 → lone dim-red frontier, 39 gray.
-    const expected = `1m ${truecolor('8%', RED)} ${truecolor('▰', dimColor(RED))}${truecolor('▰'.repeat(39), DIM)}`;
+    // pct 2 → displayPct 8 → base, withinPct 8 → floor 0 solid, 1 dim-red frontier, 9 gray.
+    const expected = `1m ${truecolor('8%', RED)} ${truecolor('▰', dimColor(RED))}${truecolor('▰▰▰▰▰▰▰▰▰', DIM)}`;
     expect(formatQuotaSegment({ pct: 2, timeLeft: '1m' }, null, 10, 4)).toBe(`⚡ ${expected}`);
   });
 
-  test('4 layers: at 0% → a lone dim-red frontier (the cell being consumed) over 39 gray', () => {
-    const expected = `0m ${truecolor('0%', RED)} ${truecolor('▰', dimColor(RED))}${truecolor('▰'.repeat(39), DIM)}`;
+  test('4 layers: just into a layer (108%) → lone dim-cyan frontier over the muted emerald base', () => {
+    // pct 27 → displayPct 108 → layer 2 (cyan), within 8 → floor 0 solid; the frontier is the cell
+    // being consumed, over the muted emerald base — crossing 100→108% never collapses to all-underlay.
+    const expected =
+      `2h ${truecolor('108%', CYAN)} ${truecolor('▰', dimColor(CYAN))}${truecolor('▰▰▰▰▰▰▰▰▰', dimColor(GREEN))}`;
+    expect(formatQuotaSegment({ pct: 27, timeLeft: '2h' }, null, 10, 4)).toBe(`⚡ ${expected}`);
+  });
+
+  test('4 layers: at 0% → 0 solid, still a lone dim frontier (the cell being consumed), 9 gray', () => {
+    // displayPct 0 → base, withinPct 0 → floor 0 solid, 1 dim-red frontier, 9 gray.
+    const expected = `0m ${truecolor('0%', RED)} ${truecolor('▰', dimColor(RED))}${truecolor('▰▰▰▰▰▰▰▰▰', DIM)}`;
     expect(formatQuotaSegment({ pct: 0, timeLeft: '0m' }, null, 10, 4)).toBe(`⚡ ${expected}`);
   });
 
-  // ── the 80-cell default (cells=20, layers=4): what a Max 20x plan actually shows ──
-  test('80 cells, byte-exact: full 400% → four 20-cell zones, no frontier', () => {
-    const expected =
-      `4h ${truecolor('400%', VIOLET)} ` +
-      `${truecolor('▰'.repeat(20), GREEN)}${truecolor('▰'.repeat(20), CYAN)}${truecolor('▰'.repeat(20), BLUE)}${truecolor('▰'.repeat(20), VIOLET)}`;
-    expect(formatQuotaSegment({ pct: 100, timeLeft: '4h' }, null, 20, 4)).toBe(`⚡ ${expected}`);
-  });
-
-  test('80 cells: 200% → base + cyan full (40), dim-blue frontier, 39 gray', () => {
-    // pct 50 → filled 40; base emerald (baseRemaining 100), cyan full, frontier at first blue cell.
-    const expected =
-      `4h ${truecolor('200%', CYAN)} ` +
-      `${truecolor('▰'.repeat(20), GREEN)}${truecolor('▰'.repeat(20), CYAN)}${truecolor('▰', dimColor(BLUE))}${truecolor('▰'.repeat(39), DIM)}`;
-    expect(formatQuotaSegment({ pct: 50, timeLeft: '4h' }, null, 20, 4)).toBe(`⚡ ${expected}`);
-  });
-
-  test('bar width is exactly cells × layers (the full stacked bar)', () => {
-    const glyphs = (s: string): number => (s.match(/▰/g) ?? []).length;
-    expect(glyphs(formatQuotaSegment({ pct: 50, timeLeft: 't' }, null, 10, 1))).toBe(10);
-    expect(glyphs(formatQuotaSegment({ pct: 50, timeLeft: 't' }, null, 20, 1))).toBe(20);
-    expect(glyphs(formatQuotaSegment({ pct: 50, timeLeft: 't' }, null, 10, 4))).toBe(40);
-    expect(glyphs(formatQuotaSegment({ pct: 50, timeLeft: 't' }, null, 20, 4))).toBe(80); // Max 20x
-  });
-
-  test('renderer and helper agree across the descent for 1- and 4-layer bars', () => {
-    for (const [cells, layers] of [
-      [10, 4],
-      [20, 4],
-      [20, 1],
-    ] as [number, number][]) {
-      for (const pct of [100, 90, 87.5, 75, 62.5, 50, 37.5, 25, 15, 8, 2, 0]) {
-        expect(formatQuotaSegment({ pct, timeLeft: 't' }, null, cells, layers)).toBe(
-          `⚡ ${lane(pct, 't', cells, layers)}`,
-        );
-      }
+  test('renderer and helper agree across the whole 4-layer descent', () => {
+    for (const pct of [100, 90, 87.5, 75, 62.5, 50, 37.5, 25, 15, 8, 2, 0]) {
+      expect(formatQuotaSegment({ pct, timeLeft: 't' }, null, 10, 4)).toBe(`⚡ ${lane(pct, 't', 10, 4)}`);
     }
   });
 });

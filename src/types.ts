@@ -197,21 +197,20 @@ export interface Config {
    */
   showWeekly: boolean;
   /**
-   * ⚡ quota bar width in cells PER LAYER (env CCSS_CELLS, default 20, each cell a fixed 5% of a
-   * layer). The full stacked bar is `cells × layers` wide (Max 20x → 20×4 = 80), one `cells`-wide
-   * colour zone per layer. An explicit CCSS_CELLS overrides the per-layer width. Render-only, so
-   * cfgKey excludes it.
+   * ⚡ quota bar width in cells — the number of cells drawn for ONE layer (env CCSS_CELLS,
+   * default 20, each cell a fixed 5% of a layer). Fixed regardless of plan: a higher tier
+   * adds layers (see `layers`), it doesn't widen the bar. An explicit CCSS_CELLS still
+   * overrides the width. Render-only, so cfgKey excludes it.
    */
   cells: number;
   /**
    * ⚡ quota LAYERS — the plan's 5-hour quota multiple (`barScale` from src/plan.ts:
    * Max 20x → 4, 5x / Team / Pro / unknown → 1). The bar stacks this many colour layers
-   * (fighting-game style) and draws them ALL, left → right, `cells` cells each: the emerald base
-   * reserve first, then the static Aurora surplus layers. The displayed max is layers×100%
-   * (4 → counts 400% → 0), and the held/frontier/consumed split spans the whole `cells × layers`
-   * width (see `renderLane` / `layerColor`). The base layer (1) is the green→amber→red danger
-   * reserve; surplus layers above it are static identity colours. CCSS_BAR_MODE picks the scale
-   * (max → 4, default → 1, auto → the tier). Render-only, so cfgKey excludes it.
+   * (fighting-game style): the fixed-width bar shows the current layer's fill, its colour
+   * says which layer you're on, and the displayed max is layers×100% (4 → counts 400% → 0).
+   * The base layer (1) is the green→amber→red danger reserve; surplus layers above it are
+   * static identity colours (see `renderLane` / `layerColor`). CCSS_BAR_MODE picks the
+   * scale (max → 4, default → 1, auto → the tier). Render-only, so cfgKey excludes it.
    */
   layers: number;
   /**
