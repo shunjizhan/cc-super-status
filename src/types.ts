@@ -197,13 +197,22 @@ export interface Config {
    */
   showWeekly: boolean;
   /**
-   * ⚡ quota bar width in cells. Precedence: explicit env CCSS_CELLS wins; else
-   * CCSS_BAR_MODE (max → 40, default → 10) sets it; else it auto-scales to the account's
-   * plan tier (Max 20x → 40; 5x / Team / Pro / unknown → 10), detected from ~/.claude.json
-   * in the impure shell (see src/plan.ts). Each cell is a fixed 10%, so the displayed
-   * quota max is cells×10 — a 40-cell bar counts down from 400% (see renderLane).
+   * ⚡ quota bar width in cells — the number of cells drawn for ONE layer (env CCSS_CELLS,
+   * default 10, each cell a fixed 10% of a layer). Fixed regardless of plan: a higher tier
+   * adds layers (see `layers`), it doesn't widen the bar. An explicit CCSS_CELLS still
+   * overrides the width. Render-only, so cfgKey excludes it.
    */
   cells: number;
+  /**
+   * ⚡ quota LAYERS — the plan's 5-hour quota multiple (`barScale` from src/plan.ts:
+   * Max 20x → 4, 5x / Team / Pro / unknown → 1). The bar stacks this many colour layers
+   * (fighting-game style): the fixed-width bar shows the current layer's fill, its colour
+   * says which layer you're on, and the displayed max is layers×100% (4 → counts 400% → 0).
+   * The base layer (1) is the green→amber→red danger reserve; surplus layers above it are
+   * static identity colours (see `renderLane` / `layerColor`). CCSS_BAR_MODE picks the
+   * scale (max → 4, default → 1, auto → the tier). Render-only, so cfgKey excludes it.
+   */
+  layers: number;
   /**
    * How stale the shared ccusage line may get before a leader spawns a fresh
    * detached recompute (env CCSS_CCUSAGE_REFRESH, default 30s). Bigger = less

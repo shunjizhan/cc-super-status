@@ -5,7 +5,7 @@ import { gatherEntries, sessionOrigin } from '../src/transcripts';
 import { computeRatesBySession } from '../src/rate';
 import { buildSnapshot } from '../src/shared';
 import { buildStatusline } from '../src/buildStatusline';
-import { quotaRgb, renderBar, truecolor } from '../src/format';
+import { DIM, dimColor, layerColor, truecolor } from '../src/format';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Deterministic e2e against on-disk fixtures.
@@ -60,10 +60,26 @@ const config: Config = {
   effectiveRate: true,
   showWeekly: false,
   cells: 10,
+  layers: 1,
   ccusageRefreshSec: 30,
   lookbackMs: 120 * 1000 + 60_000,
   tailBytes: 1_048_576,
   projectsDir: PROJECTS_DIR,
+};
+
+// Expected ⚡ lane for a 1-layer plan (Pro / 5x — the e2e config): a single emerald→amber→red
+// bar — `solid = floor(pct/10)` fully-held cells, then the single dim FRONTIER cell being
+// consumed, then the dim gray track. displayPct == pct at layers=1. Mirrors renderLane;
+// layerColor/dimColor/DIM are pinned to literals in format.test.ts.
+const bar1 = (pct: number, timeLeft: string): string => {
+  const rgb = layerColor(1, pct);
+  const solid = Math.min(Math.max(Math.floor((pct / 100) * 10), 0), 10);
+  const hasFrontier = solid < 10;
+  const empty = 10 - solid - (hasFrontier ? 1 : 0);
+  const solidRun = solid > 0 ? truecolor('▰'.repeat(solid), rgb) : '';
+  const frontier = hasFrontier ? truecolor('▰', dimColor(rgb)) : '';
+  const emptyRun = empty > 0 ? truecolor('▰'.repeat(empty), DIM) : '';
+  return `${timeLeft} ${truecolor(`${pct}%`, rgb)} ${solidRun}${frontier}${emptyRun}`;
 };
 
 // Deterministic activity fixture for the render tests → countActive gives 2[1].
@@ -141,9 +157,8 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
   const ccusageLine =
     '🤖 Opus 4.8 (1M context) | 💰 $13.50 session / $330.00 today / $31.25 block (2h 35m left) | 🔥 $13.18/hr | 🧠 1,000 (2%)';
 
-  // block=31.25 → round 31 → pct=round((125-31)/125*100)=75 → green.
-  const pct = 75;
-  const quotaColored = truecolor(`${pct}% ${renderBar(pct, 10)}`, quotaRgb(pct));
+  // block=31.25 → round 31 → pct=round((125-31)/125*100)=75 → green. 1-layer bar (no scaling).
+  const ccBar = bar1(75, '2h 35m');
 
   // Build the shared snapshot the way a leader/local tick would, injecting deterministic FILES.
   const snapshotOf = async (cfg: Config, limits: MergedRateLimits | null, line: string | null) => {
@@ -159,7 +174,7 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
       ' | 🔥 $13.18/hr' +
       ' | ⭐️ {163}322t/s 2[1]' +
       ' | 💰 $13.5 / $31 / $330' +
-      ` | ⚡ 2h 35m ${quotaColored}`;
+      ` | ⚡ ${ccBar}`;
     expect(actual).toBe(expected);
   });
 
@@ -180,7 +195,7 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
       ' | 🔥 $13.18/hr' +
       ' | 🌟 {200}350t/s 2[1]' +
       ' | 💰 $13.5 / $31 / $330' +
-      ` | ⚡ 2h 35m ${quotaColored}`;
+      ` | ⚡ ${ccBar}`;
     expect(actual).toBe(expected);
   });
 
@@ -218,9 +233,7 @@ describe('e2e: buildStatusline with merged rate limits', () => {
     '🤖 Fable 5 | 💰 $13.50 session / $330.00 today / $31.25 block (2h 35m left) | 🔥 $13.18/hr | 🧠 1,000 (2%)';
 
   const twoBars = (fhPct: number, fhT: string, wdPct: number, wdT: string): string =>
-    `⚡ ${fhT} ${truecolor(`${fhPct}% ${renderBar(fhPct, 10)}`, quotaRgb(fhPct))}` +
-    ` ${wdT} ${truecolor(`${wdPct}% ${renderBar(wdPct, 10)}`, quotaRgb(wdPct))}`;
-  const ccColored = truecolor(`75% ${renderBar(75, 10)}`, quotaRgb(75));
+    `⚡ ${bar1(fhPct, fhT)} ${bar1(wdPct, wdT)}`;
   const weekly: Config = { ...config, showWeekly: true };
 
   const snapshotOf = async (cfg: Config, limits: MergedRateLimits | null, line: string | null) => {
@@ -252,8 +265,8 @@ describe('e2e: buildStatusline with merged rate limits', () => {
     const limits = { five_hour: { used_percentage: null, resets_at: null } } as unknown as MergedRateLimits;
     const shared = await snapshotOf(weekly, limits, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config: weekly });
-    expect(actual).toContain(`⚡ 2h 35m ${ccColored}`);
-    expect(actual.endsWith(`⚡ 2h 35m ${ccColored}`)).toBe(true);
+    expect(actual).toContain(`⚡ ${bar1(75, '2h 35m')}`);
+    expect(actual.endsWith(`⚡ ${bar1(75, '2h 35m')}`)).toBe(true);
   });
 
   test('five_hour absent but seven_day present → ccusage 5h bar beside the weekly bar', async () => {
@@ -265,7 +278,7 @@ describe('e2e: buildStatusline with merged rate limits', () => {
   test('weekly disabled by default (showWeekly:false) → only the 5h bar even with seven_day present', async () => {
     const shared = await snapshotOf(config, { five_hour: FIVE_HOUR, seven_day: SEVEN_DAY }, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config });
-    const fhOnly = `⚡ 1h 5m ${truecolor(`60% ${renderBar(60, 10)}`, quotaRgb(60))}`;
+    const fhOnly = `⚡ ${bar1(60, '1h 5m')}`;
     expect(actual).toContain(fhOnly);
     expect(actual.endsWith(fhOnly)).toBe(true);
   });

@@ -15,6 +15,7 @@ describe('parseConfig — defaults', () => {
       effectiveRate: true,
       showWeekly: false,
       cells: 10,
+      layers: 1,
       ccusageRefreshSec: 30,
       lookbackMs: 120 * 1000 + 60_000,
       tailBytes: 1_048_576,
@@ -46,24 +47,33 @@ describe('parseConfig — num()', () => {
   });
 });
 
-describe('parseConfig — cells / plan bar scale', () => {
-  test('default is 10 cells (baseline scale)', () => {
+describe('parseConfig — cells (flat width) + layers (plan scale)', () => {
+  test('cells default is a flat 10, independent of the plan scale', () => {
     expect(parseConfig({ HOME }).cells).toBe(10);
+    expect(parseConfig({ HOME }, 4).cells).toBe(10); // Max 20x no longer widens the bar
   });
 
-  test('barScale scales the default (Max 20x → 4× → 40 cells)', () => {
-    expect(parseConfig({ HOME }, 4).cells).toBe(40);
-    expect(parseConfig({ HOME }, 1).cells).toBe(10);
+  test('barScale sets the layer count, not the width (Max 20x → 4 layers)', () => {
+    expect(parseConfig({ HOME }).layers).toBe(1);
+    expect(parseConfig({ HOME }, 1).layers).toBe(1);
+    expect(parseConfig({ HOME }, 4).layers).toBe(4);
   });
 
-  test('explicit CCSS_CELLS always wins over the plan scale', () => {
-    expect(parseConfig({ HOME, CCSS_CELLS: '25' }, 4).cells).toBe(25);
+  test('layers clamps to ≥ 1 and rounds a fractional scale', () => {
+    expect(parseConfig({ HOME }, 0).layers).toBe(1); // guard: never zero layers
+    expect(parseConfig({ HOME }, 2.4).layers).toBe(2);
+  });
+
+  test('explicit CCSS_CELLS overrides the width but leaves layers to the plan', () => {
+    const c = parseConfig({ HOME, CCSS_CELLS: '25' }, 4);
+    expect(c.cells).toBe(25);
+    expect(c.layers).toBe(4);
     expect(parseConfig({ HOME, CCSS_CELLS: '80' }).cells).toBe(80);
   });
 
-  test('invalid CCSS_CELLS (zero / non-numeric) falls back to the scaled default', () => {
-    expect(parseConfig({ HOME, CCSS_CELLS: '0' }, 4).cells).toBe(40);
-    expect(parseConfig({ HOME, CCSS_CELLS: 'abc' }, 4).cells).toBe(40);
+  test('invalid CCSS_CELLS (zero / non-numeric) falls back to the flat default 10', () => {
+    expect(parseConfig({ HOME, CCSS_CELLS: '0' }, 4).cells).toBe(10);
+    expect(parseConfig({ HOME, CCSS_CELLS: 'abc' }, 4).cells).toBe(10);
   });
 });
 

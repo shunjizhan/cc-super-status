@@ -12,10 +12,10 @@ import { readFileSync } from 'node:fs';
 export const claudeJsonPath = (): string => `${process.env.HOME}/.claude.json`;
 
 /**
- * Scale the ⚡ quota bar to the plan's 5-hour quota multiple, baselined at Max 5× (=1×).
- * A "…claude_max_Nx" tier → N/5, so Max 20x → 20/5 = 4× the bar (40 cells). Team / Pro /
- * API-key / unknown / absent → 1× (the default bar). Pure. `Math.max(1, …)` guards a
- * hypothetical sub-5× tier so detection can only ever lengthen the bar, never shrink it.
+ * The plan's 5-hour quota multiple, baselined at Max 5× (=1×) — the ⚡ bar's LAYER count.
+ * A "…claude_max_Nx" tier → N/5, so Max 20x → 20/5 = 4 stacked bar layers. Team / Pro /
+ * API-key / unknown / absent → 1 (a single green base layer). Pure. `Math.max(1, …)` guards a
+ * hypothetical sub-5× tier so detection can only ever add layers, never drop below the base.
  */
 export const planBarScale = (tier: string | null | undefined): number => {
   const m = tier?.match(/claude_max_(\d+)x/);
@@ -25,8 +25,8 @@ export const planBarScale = (tier: string | null | undefined): number => {
 /**
  * Resolve the ⚡ bar scale from an explicit mode plus the detected plan tier — this is
  * what env `CCSS_BAR_MODE` selects:
- *   - `max` / `4x`               → force 4× (the long 400% bar), whatever the plan,
- *   - `default` / `normal` / `1x`→ force 1× (the normal 100% bar), even on Max 20x,
+ *   - `max` / `4x`               → force 4 layers (the 400% stack), whatever the plan,
+ *   - `default` / `normal` / `1x`→ force 1 layer (the plain 100% bar), even on Max 20x,
  *   - `auto` / unset / anything else → auto-detect from the tier (`planBarScale`).
  * Pure. Case-insensitive; a manual `CCSS_CELLS` still overrides the result downstream.
  */

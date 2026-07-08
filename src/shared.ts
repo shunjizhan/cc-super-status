@@ -35,8 +35,8 @@ const SNAP_MAX_AGE_MS = 2 * LEASE_MS;
 
 /**
  * Config fingerprint — only the fields that change what the SHARED snapshot contains
- * (the rate math and the active-count window). Render-only prefs (weekly, cells, quota
- * estimate) are applied per-pane from the same snapshot, so they're excluded: panes
+ * (the rate math and the active-count window). Render-only prefs (weekly, cells, layers,
+ * quota estimate) are applied per-pane from the same snapshot, so they're excluded: panes
  * that differ only in those still share one snapshot. A snapshot built under a
  * different fingerprint is ignored (also scopes the snapshot's filename).
  */

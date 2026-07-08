@@ -80,7 +80,7 @@ export const buildStatusline = (args: BuildArgs): string => {
       ? sevenDayLane(sevenDay.used_percentage, sevenDay.resets_at, now)
       : null;
 
-  const quota = formatQuotaSegment(fiveHourQuota, sevenDayQuota, config.cells);
+  const quota = formatQuotaSegment(fiveHourQuota, sevenDayQuota, config.cells, config.layers);
   if (quota) segments.push(quota);
 
   return segments.join(' | ');

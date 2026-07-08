@@ -24,6 +24,7 @@ const baseConfig: Config = {
   effectiveRate: true,
   showWeekly: false,
   cells: 10,
+  layers: 1,
   ccusageRefreshSec: 30,
   lookbackMs: 120 * 1000 + 60_000,
   tailBytes: 1_048_576,
@@ -31,10 +32,11 @@ const baseConfig: Config = {
 };
 
 describe('cfgKey', () => {
-  test('is stable and ignores render-only prefs (weekly, cells, quota)', () => {
+  test('is stable and ignores render-only prefs (weekly, cells, layers, quota)', () => {
     const k = cfgKey(baseConfig);
     expect(cfgKey({ ...baseConfig, showWeekly: true })).toBe(k);
     expect(cfgKey({ ...baseConfig, cells: 20 })).toBe(k);
+    expect(cfgKey({ ...baseConfig, layers: 4 })).toBe(k); // plan scale is per-pane, not in the fingerprint
     expect(cfgKey({ ...baseConfig, quota: 999 })).toBe(k);
     expect(cfgKey({ ...baseConfig, ccusageRefreshSec: 60 })).toBe(k);
   });

@@ -29,10 +29,12 @@ const bool = (v: string | undefined, fallback: boolean): boolean => {
 };
 
 /**
- * Resolve the full runtime config from an environment map. `barScale` scales the
- * default ⚡ bar width to the account's plan tier (see src/plan.ts): the impure shell
- * passes `planBarScale(detectRateLimitTier())` (Max 20x → 4), and an explicit
- * `CCSS_CELLS` still overrides it. Defaults to 1 so `parseConfig(env)` alone is unchanged.
+ * Resolve the full runtime config from an environment map. `barScale` is the account's
+ * plan tier multiple (see src/plan.ts): the impure shell passes
+ * `barScaleForMode(CCSS_BAR_MODE, detectRateLimitTier())` (Max 20x → 4). It sets the ⚡
+ * bar's LAYER count, not its width — the bar stays a fixed `cells` wide and stacks
+ * `barScale` colour layers. Defaults to 1 (single green layer) so `parseConfig(env)` alone
+ * is unchanged.
  */
 export const parseConfig = (env: Env, barScale = 1): Config => {
   const windowSec = num(env.CCSS_WINDOW, 120);
@@ -45,7 +47,9 @@ export const parseConfig = (env: Env, barScale = 1): Config => {
     includeCache: bool(env.CCSS_CACHE, true),
     effectiveRate: bool(env.CCSS_EFFECTIVE, true),
     showWeekly: bool(env.CCSS_WEEKLY, false),
-    cells: num(env.CCSS_CELLS, Math.round(10 * barScale)),
+    cells: num(env.CCSS_CELLS, 10),
+    // Plan multiple → number of stacked colour layers (Max 20x → 4). Width is now flat.
+    layers: Math.max(1, Math.round(barScale)),
     ccusageRefreshSec: num(env.CCSS_CCUSAGE_REFRESH, 30),
     // Cover BOTH transcript consumers: the rate needs files within windowSec, the live
     // counts within activeWindowSec. Use the larger (+60s buffer) so a file fresh for
