@@ -20,19 +20,18 @@ const modelEmoji = (displayName: string | undefined, modelId: string | undefined
 };
 
 /**
- * Render the model segment, e.g. `🥷 Opus 4.8-1m (ultracode)`.
+ * Render the model segment, e.g. `🥷 Opus 4.8 (xhigh)`.
  * Emoji is per-model (see `modelEmoji`); name = displayName ?? modelId ?? '?', with
- * ' (1M context)' collapsed to '-1m'; effort 'xhigh' is shown as 'ultracode', omitted
- * entirely when absent.
+ * ' (1M context)' stripped (1M is the default now, so the tag is noise); effort is shown
+ * verbatim (e.g. 'xhigh'), omitted entirely when absent.
  */
 export const formatModel = (
   displayName: string | undefined,
   modelId: string | undefined,
   effortLevel: string | undefined,
 ): string => {
-  const name = (displayName ?? modelId ?? '?').replace(' (1M context)', '-1m');
-  const effort = effortLevel === 'xhigh' ? 'ultracode' : effortLevel;
-  return `${modelEmoji(displayName, modelId)} ${name}` + (effort ? ` (${effort})` : '');
+  const name = (displayName ?? modelId ?? '?').replace(' (1M context)', '');
+  return `${modelEmoji(displayName, modelId)} ${name}` + (effortLevel ? ` (${effortLevel})` : '');
 };
 
 /**

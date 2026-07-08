@@ -7,7 +7,7 @@ Guidance for working in this repo. User-facing docs are in `README.md`; this fil
 A Claude Code `statusLine` command. Claude Code pipes a JSON blob on stdin every ~5s (and on events); whatever this prints to stdout becomes the user's status line:
 
 ```
-🥷 Opus 4.8-1m (ultracode) | 🔥 $13.18/hr | ⭐️ {50}300t/s 3[7] | 💰 $13.5 / $31 / $330 | ⚡ 42m 53% ▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱
+🥷 Opus 4.8 (xhigh) | 🔥 $13.18/hr | ⭐️ {50}300t/s 3[7] | 💰 $13.5 / $31 / $330 | ⚡ 42m 53% ▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱
 ```
 
 It is wired in via `~/.claude/settings.json` → `statusLine.command` (currently `/opt/homebrew/bin/bun run <repo>/statusline.ts`). It **replaced** an older bash script (`~/.claude/ccusage-statusline.sh`, now deleted).

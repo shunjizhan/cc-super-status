@@ -3,7 +3,7 @@
 A souped-up [Claude Code](https://docs.anthropic.com/en/docs/claude-code) status line: model + effort, burn rate, **cross-session** token throughput, cost breakdown, and a colored quota bar — all on one line.
 
 ```
-🥷 Opus 4.8-1m (ultracode) | 🔥 $13.18/hr | ⭐️ {50}300t/s 3[7] | 💰 $13.5 / $31 / $330 | ⚡ 42m 53% ▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱
+🥷 Opus 4.8 (xhigh) | 🔥 $13.18/hr | ⭐️ {50}300t/s 3[7] | 💰 $13.5 / $31 / $330 | ⚡ 42m 53% ▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱
 ```
 
 Runs on [Bun](https://bun.sh) (no build step — `bun run` executes the TypeScript directly).
@@ -14,7 +14,7 @@ Segments are joined by ` | ` in this fixed order. The two **ccusage-derived** se
 
 | Segment | Meaning | Source |
 | --- | --- | --- |
-| 🥷 `Opus 4.8-1m (ultracode)` | Model + reasoning effort. The leading emoji is per-model — 🐉 Fable, 🥷 Opus, 🐱 Sonnet, 🤖 for anything else (Haiku, unknown). `(1M context)` collapses to `-1m`; effort `xhigh` renders as `ultracode`, other levels pass through, absent effort is omitted. | stdin JSON (`model`, `effort`) |
+| 🥷 `Opus 4.8 (xhigh)` | Model + reasoning effort. The leading emoji is per-model — 🐉 Fable, 🥷 Opus, 🐱 Sonnet, 🤖 for anything else (Haiku, unknown). The ` (1M context)` tag is stripped (1M is the default now, so it's noise); effort is shown verbatim (e.g. `xhigh`), absent effort is omitted. | stdin JSON (`model`, `effort`) |
 | 🔥 `$13.18/hr` | Current dollar **burn rate**, verbatim from ccusage. | `ccusage statusline` |
 | ⭐️ `{50}300t/s 3[7]` | **Token throughput** over the sliding window, charge-weighted by default (⭐️; raw mode shows 🌟 — see below). `{cur}all` — `cur` = current session (this transcript + its subagents), `all` = every recent session. Collapses to a single `Nt/s` when `cur === all`. The trailing `<sessions>[<subagents>]` counts the sessions and sub-agents **working right now** — those whose transcript was touched in the last `CCSS_ACTIVE_WINDOW` seconds (default 15). Always shown (idle reads `0[0]`), so it never blinks out from under the following ` \| `. | transcripts on disk |
 | 💰 `$13.5 / $31 / $330` | Cost: **session / block / today** (session to 1 decimal, block and today rounded). Session is instant and per-pane (stdin `cost.total_cost_usd`); block and today are account-global from ccusage. | stdin `cost` + `ccusage statusline` |

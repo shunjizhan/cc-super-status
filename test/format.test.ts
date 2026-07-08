@@ -50,21 +50,21 @@ const lane = (pct: number, timeLeft: string, cells: number, layers: number): str
 };
 
 describe('formatModel', () => {
-  test('display name with 1M context + xhigh → ultracode', () => {
+  test('1M-context tag is stripped; effort shown verbatim (xhigh)', () => {
     expect(formatModel('Opus 4.8 (1M context)', 'claude-opus-4-8[1m]', 'xhigh')).toBe(
-      '🥷 Opus 4.8-1m (ultracode)',
+      '🥷 Opus 4.8 (xhigh)',
     );
   });
 
-  test('high effort passes through', () => {
+  test('effort passes through verbatim (high)', () => {
     expect(formatModel('Opus 4.8 (1M context)', 'claude-opus-4-8[1m]', 'high')).toBe(
-      '🥷 Opus 4.8-1m (high)',
+      '🥷 Opus 4.8 (high)',
     );
   });
 
   test('undefined effort omits the suffix', () => {
     expect(formatModel('Opus 4.8 (1M context)', 'claude-opus-4-8[1m]', undefined)).toBe(
-      '🥷 Opus 4.8-1m',
+      '🥷 Opus 4.8',
     );
   });
 
@@ -79,12 +79,12 @@ describe('formatModel', () => {
 
 describe('formatModel — per-model emoji', () => {
   test('Fable → 🐉 dragon', () => {
-    expect(formatModel('Fable 5', 'claude-fable-5', 'xhigh')).toBe('🐉 Fable 5 (ultracode)');
+    expect(formatModel('Fable 5', 'claude-fable-5', 'xhigh')).toBe('🐉 Fable 5 (xhigh)');
   });
 
   test('Opus → 🥷 ninja', () => {
     expect(formatModel('Opus 4.8 (1M context)', 'claude-opus-4-8[1m]', 'high')).toBe(
-      '🥷 Opus 4.8-1m (high)',
+      '🥷 Opus 4.8 (high)',
     );
   });
 

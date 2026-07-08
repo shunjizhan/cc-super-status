@@ -1,7 +1,7 @@
 // cc-super-status — shared contract. Every module implements against these types.
 //
 // Final status line (segments joined by " | "):
-//   🤖 <model>-1m (<effort>) | 🔥 <burn> | ⭐️ {<cur>}<all>t/s <sessions>[<subagents>] | 💰 $<session> / $<block> / $<today> | ⚡ <5hTime> <5h%> <bar> <7dTime> <7d%> <bar>
+//   🤖 <model> (<effort>) | 🔥 <burn> | ⭐️ {<cur>}<all>t/s <sessions>[<subagents>] | 💰 $<session> / $<block> / $<today> | ⚡ <5hTime> <5h%> <bar> <7dTime> <7d%> <bar>
 //
 // Data flows on three clocks (see README "Multi-session architecture"), each sized to
 // what its data costs, so no render ever waits on something slow:
