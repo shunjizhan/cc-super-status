@@ -96,10 +96,49 @@ export interface TokenEntry {
 }
 
 /**
+ * Turn state classified from a transcript's tail (see `classifyTail`). Claude Code
+ * writes each row at the moment its event happens, so the tail mirrors the live
+ * turn — unlike mtime recency, which goes stale for minutes during long
+ * thinking/streaming turns and long tool runs while the session is fully busy.
+ *  - 'busy'    → a turn is in flight (trailing prompt, dispatched tool call, or
+ *                tool result awaiting the model);
+ *  - 'stalled' → probably in flight, but on evidence that goes stale fast: a
+ *                trailing mid-flush assistant row (no stop_reason — the next row
+ *                normally lands within minutes, but a runner-stopped agent leaves
+ *                this shape forever) or an API error (retrying or dead);
+ *  - 'ended'   → the last turn completed (end-of-turn assistant row, turn-end
+ *                system marker, a user interrupt, or a workflow agent's terminal
+ *                StructuredOutput call);
+ *  - 'unknown' → token events but no classifiable rows, or a live-looking row
+ *                without a usable timestamp (transcript format drift) — counted
+ *                via the mtime-freshness fallback window.
+ */
+export type TurnState = 'busy' | 'stalled' | 'ended' | 'unknown';
+
+/**
+ * One transcript's cached tail classification, carried in the SharedSnapshot and
+ * keyed by path. Valid while the file's mtime is unchanged, so even a stale
+ * snapshot's cache is safe to reuse — it lets the next leader skip re-reading
+ * tails that cannot have changed. `state: null` records "no meaningful rows"
+ * (journal.jsonl etc.), so those files aren't re-parsed every generation either.
+ */
+export interface CachedTailState {
+  /** file mtime (epoch ms) at classification time — the cache-validity key. */
+  mtimeMs: number;
+  /** the classified state, or null when the tail had no meaningful rows. */
+  state: TurnState | null;
+  /** Meaningful row time, or mtime for `unknown`; null with a null state. */
+  stateAtMs: number | null;
+}
+
+/**
  * One recently-touched transcript file, reduced to what the ⭐️ activity counts
- * need. Emitted per transcript that produced ≥1 token event (so journal.jsonl and
- * other non-assistant files are excluded). `mtimeMs` is the file's last-write time
- * — the freshest "is this being worked on right now" signal on disk.
+ * need. Emitted per transcript whose tail classified to a turn state or produced
+ * ≥1 token event (so journal.jsonl and other non-assistant files are excluded).
+ * `state` is the primary liveness signal; `stateAtMs` ages out corpses from the
+ * meaningful event that established the state. `mtimeMs` is the cache key and
+ * scan lookback clock, plus the short fallback for `unknown`; metadata-only file
+ * updates cannot grant an old classified turn a new corpse TTL.
  */
 export interface FileActivity {
   /** session id — main transcript basename, or the `<session_id>` dir above a subagent. */
@@ -108,13 +147,17 @@ export interface FileActivity {
   subagent: string | null;
   /** file modification time, epoch milliseconds. */
   mtimeMs: number;
+  /** turn state classified from the transcript tail. */
+  state: TurnState;
+  /** meaningful event time for the classified state; mtime fallback for `unknown`. */
+  stateAtMs: number;
 }
 
 /** Counts of sessions / sub-agents active right now (see `countActive`). */
 export interface ActiveCounts {
-  /** distinct sessions with a transcript touched within CCSS_ACTIVE_WINDOW. */
+  /** distinct sessions with a live turn state (busy/stalled within TTL, or 'unknown' mtime-fresh). */
   sessions: number;
-  /** distinct sub-agents with a transcript touched within CCSS_ACTIVE_WINDOW. */
+  /** distinct sub-agents with a live turn state (same liveness rules). */
   subagents: number;
 }
 
@@ -148,6 +191,12 @@ export interface SharedSnapshot {
   limits: MergedRateLimits | null;
   /** validated global `ccusage statusline` line for 🔥/💰 block+today, or null. */
   ccusage: string | null;
+  /**
+   * Per-path tail-state cache from this generation's walk (see `CachedTailState`).
+   * The next leader passes it back into `gatherEntries` so unchanged files past
+   * the rate lookback are never re-read. Optional: absent on old snapshots.
+   */
+  states?: Record<string, CachedTailState>;
 }
 
 /** Structured data parsed from one `ccusage statusline` output line. */
@@ -171,10 +220,11 @@ export interface Config {
   /** rate sliding-window in seconds (env CCSS_WINDOW, default 120). */
   windowSec: number;
   /**
-   * Active-count freshness window in seconds (env CCSS_ACTIVE_WINDOW, default 15).
-   * A transcript touched within this many seconds counts toward the ⭐️
-   * `<sessions>[<subagents>]` suffix. Independent of `windowSec` — this tracks
-   * live work (file mtime), not token throughput.
+   * Fallback freshness window in seconds (env CCSS_ACTIVE_WINDOW, default 15) for
+   * the ⭐️ `<sessions>[<subagents>]` counts — applied only to transcripts whose
+   * turn state couldn't be classified from the tail (`state: 'unknown'`).
+   * Classified files live by their state instead: busy/error until a corpse TTL,
+   * ended dropped immediately. Independent of `windowSec`.
    */
   activeWindowSec: number;
   /**

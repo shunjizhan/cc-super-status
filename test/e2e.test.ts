@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import type { Config, FileActivity, MergedRateLimits, StatuslineInput } from '../src/types';
-import { gatherEntries, sessionOrigin } from '../src/transcripts';
+import type { CachedTailState, Config, FileActivity, MergedRateLimits, StatuslineInput } from '../src/types';
+import { countActive, gatherEntries, sessionOrigin } from '../src/transcripts';
 import { computeRatesBySession } from '../src/rate';
 import { buildSnapshot } from '../src/shared';
 import { buildStatusline } from '../src/buildStatusline';
@@ -39,11 +42,13 @@ import { DIM, dimColor, layerColor, truecolor } from '../src/format';
 //   RAW + cache:                 all = 350; sessCUR = 200; sessOTHER = 150
 //   RAW, cache excluded:         all = 100; sessCUR =  50; sessOTHER =  50
 //
-// Active-session / sub-agent counts come from a SEPARATE signal — transcript file mtimes
-// over CCSS_ACTIVE_WINDOW — not the token window. Because file mtimes are real disk state
-// (not the fixture NOW), the render tests inject a deterministic FILES fixture into the
-// snapshot rather than depend on when the fixtures were last touched. All three touched
-// just before NOW → countActive gives sessions = { sessCUR, sessOTHER } = 2,
+// Active-session / sub-agent counts come from a SEPARATE signal — each transcript
+// tail's classified turn state (busy / error / ended), with mtime only as a corpse
+// TTL and as the freshness window for unclassifiable ('unknown') files — not the
+// token window. Because the fixtures' live states/mtimes are real disk state (not
+// the fixture NOW), the render tests inject a deterministic FILES fixture into the
+// snapshot rather than depend on the on-disk classification. All three busy just
+// before NOW → countActive gives sessions = { sessCUR, sessOTHER } = 2,
 // subagents = { …/agent-x } = 1 → "2[1]".
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -84,9 +89,9 @@ const bar1 = (pct: number, timeLeft: string): string => {
 
 // Deterministic activity fixture for the render tests → countActive gives 2[1].
 const FILES: FileActivity[] = [
-  { session: 'sessCUR', subagent: null, mtimeMs: NOW - 1000 },
-  { session: 'sessCUR', subagent: `${PROJECTS_DIR}/enc-cur/sessCUR/subagents/agent-x.jsonl`, mtimeMs: NOW - 1000 },
-  { session: 'sessOTHER', subagent: null, mtimeMs: NOW - 1000 },
+  { session: 'sessCUR', subagent: null, mtimeMs: NOW - 1000, state: 'busy', stateAtMs: NOW - 1000 },
+  { session: 'sessCUR', subagent: `${PROJECTS_DIR}/enc-cur/sessCUR/subagents/agent-x.jsonl`, mtimeMs: NOW - 1000, state: 'busy', stateAtMs: NOW - 1000 },
+  { session: 'sessOTHER', subagent: null, mtimeMs: NOW - 1000, state: 'busy', stateAtMs: NOW - 1000 },
 ];
 
 describe('e2e: gatherEntries + computeRatesBySession', () => {
@@ -125,11 +130,11 @@ describe('e2e: gatherEntries + computeRatesBySession', () => {
     });
   });
 
-  test('files: one FileActivity per token-bearing transcript; usage-less journal.jsonl excluded', async () => {
-    const { files } = await gatherEntries(config, NOW);
+  test('files: one FileActivity per real transcript; classifier-blind journal.jsonl excluded', async () => {
+    const { files, states } = await gatherEntries(config, NOW);
     // The walk sees 4 files, but journal.jsonl (a sibling of agent-x.jsonl with no
-    // message.usage) produces no token events, so gatherEntries' `entries.length > 0`
-    // guard drops it — only the 3 real transcripts become activity. Classify by path.
+    // user/assistant rows) classifies to no turn state and yields no token events,
+    // so gatherEntries drops it — only the 3 real transcripts become activity.
     const byKey = files.map((f) => ({ session: f.session, subagent: f.subagent })).sort((a, b) =>
       (a.subagent ?? a.session).localeCompare(b.subagent ?? b.session),
     );
@@ -142,7 +147,181 @@ describe('e2e: gatherEntries + computeRatesBySession', () => {
     );
     expect(files.some((f) => f.subagent?.endsWith('journal.jsonl'))).toBe(false);
     expect(files.every((f) => Number.isFinite(f.mtimeMs))).toBe(true);
+    // Fixture rows are assistant messages without stop_reason → mid-flush → stalled.
+    expect(files.every((f) => f.state === 'stalled')).toBe(true);
+    // Every looked-at transcript (including journal.jsonl, cached as null) is in the state cache.
+    expect(Object.keys(states)).toHaveLength(4);
+    expect(Object.entries(states).find(([p]) => p.endsWith('journal.jsonl'))?.[1].state).toBe(null);
     expect(files).toHaveLength(3);
+  });
+});
+
+describe('e2e: turn-state lane + snapshot cache (beyond the rate lookback)', () => {
+  // Scratch projects dir with explicit utimes — the only way to exercise the
+  // rateFresh=false lane deterministically (the checked-in fixtures are always
+  // mtime-fresh relative to NOW).
+  const AGE_MS = 4 * 60_000; // inside STATE_LOOKBACK (35min), outside lookbackMs (~3min)
+  const mkProjects = (rows: string): { dir: string; file: string } => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccss-e2e-'));
+    mkdirSync(join(dir, 'enc'), { recursive: true });
+    const file = join(dir, 'enc', 'sessOLD.jsonl');
+    writeFileSync(file, rows);
+    const mtime = new Date(NOW - AGE_MS);
+    utimesSync(file, mtime, mtime);
+    return { dir, file };
+  };
+  // A busy tail with a token-bearing assistant row — proves the token parse is
+  // suppressed by the lane, not by an absence of usage.
+  const busyRows =
+    JSON.stringify({ type: 'assistant', timestamp: '2026-05-31T11:57:00.000Z', message: { id: 'mOLD', stop_reason: 'tool_use', usage: { input_tokens: 999 } } }) + '\n';
+  const BUSY_AT_MS = Date.parse('2026-05-31T11:57:00.000Z');
+
+  test('state lane: activity classified, token parse suppressed, state cached by path', async () => {
+    const { dir, file } = mkProjects(busyRows);
+    const cfg: Config = { ...config, projectsDir: dir };
+    const { entries, files, states } = await gatherEntries(cfg, NOW);
+    expect(entries).toEqual([]); // beyond the rate lookback → no token events
+    expect(files).toEqual([{ session: 'sessOLD', subagent: null, mtimeMs: NOW - AGE_MS, state: 'busy', stateAtMs: BUSY_AT_MS }]);
+    expect(states[file]).toEqual({ mtimeMs: NOW - AGE_MS, state: 'busy', stateAtMs: BUSY_AT_MS });
+  });
+
+  test('metadata-only file updates do not resurrect an old unfinished prompt', async () => {
+    const oldPrompt = JSON.stringify({
+      type: 'user',
+      timestamp: new Date(NOW - 31 * 60_000).toISOString(),
+      message: { role: 'user', content: 'abandoned prompt' },
+    });
+    const metadata = JSON.stringify({ type: 'permission-mode', permissionMode: 'default' });
+    const { dir } = mkProjects(`${oldPrompt}\n${metadata}\n`);
+    const cfg: Config = { ...config, projectsDir: dir };
+
+    const first = await gatherEntries(cfg, NOW);
+    const cached = await gatherEntries(cfg, NOW, first.states);
+
+    expect([
+      countActive(first.files, NOW, cfg.activeWindowSec * 1000),
+      countActive(cached.files, NOW, cfg.activeWindowSec * 1000),
+    ]).toEqual([
+      { sessions: 0, subagents: 0 },
+      { sessions: 0, subagents: 0 },
+    ]);
+  });
+
+  test('a state row without a usable timestamp uses the short fallback window', async () => {
+    const prompt = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: 'prompt without timestamp' },
+    });
+    const { dir } = mkProjects(`${prompt}\n`);
+    const cfg: Config = { ...config, projectsDir: dir };
+
+    const { files } = await gatherEntries(cfg, NOW);
+
+    expect({ state: files[0]?.state, counts: countActive(files, NOW, cfg.activeWindowSec * 1000) }).toEqual({
+      state: 'unknown',
+      counts: { sessions: 0, subagents: 0 },
+    });
+  });
+
+  test('a recent tool result keeps a long-running tool turn active', async () => {
+    const dispatch = JSON.stringify({
+      type: 'assistant',
+      timestamp: new Date(NOW - 31 * 60_000).toISOString(),
+      message: { id: 'mLONG', stop_reason: 'tool_use' },
+    });
+    const result = JSON.stringify({
+      type: 'user',
+      timestamp: new Date(NOW - AGE_MS).toISOString(),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'done' }] },
+    });
+    const { dir } = mkProjects(`${dispatch}\n${result}\n`);
+    const cfg: Config = { ...config, projectsDir: dir };
+
+    const { files } = await gatherEntries(cfg, NOW);
+
+    expect(countActive(files, NOW, cfg.activeWindowSec * 1000)).toEqual({ sessions: 1, subagents: 0 });
+  });
+
+  test('a tool result without a timestamp uses the short fallback window', async () => {
+    const dispatch = JSON.stringify({
+      type: 'assistant',
+      timestamp: new Date(NOW - 31 * 60_000).toISOString(),
+      message: { id: 'mLONG', stop_reason: 'tool_use' },
+    });
+    const result = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'done' }] },
+    });
+    const { dir } = mkProjects(`${dispatch}\n${result}\n`);
+    const cfg: Config = { ...config, projectsDir: dir };
+
+    const { files } = await gatherEntries(cfg, NOW);
+
+    expect({ state: files[0]?.state, counts: countActive(files, NOW, cfg.activeWindowSec * 1000) }).toEqual({
+      state: 'unknown',
+      counts: { sessions: 0, subagents: 0 },
+    });
+  });
+
+  test('a future row and file mtime cannot extend the busy TTL past now', async () => {
+    const future = new Date(NOW + 60 * 60_000);
+    const prompt = JSON.stringify({
+      type: 'user',
+      timestamp: future.toISOString(),
+      message: { role: 'user', content: 'future-clock prompt' },
+    });
+    const { dir, file } = mkProjects(`${prompt}\n`);
+    utimesSync(file, future, future);
+    const cfg: Config = { ...config, projectsDir: dir };
+
+    const { files } = await gatherEntries(cfg, NOW);
+
+    expect(countActive(files, NOW + 30 * 60_000 + 1, cfg.activeWindowSec * 1000)).toEqual({
+      sessions: 0,
+      subagents: 0,
+    });
+  });
+
+  test('cache hit (matching mtime) skips the read — the cached state wins over the tail', async () => {
+    const { dir, file } = mkProjects(busyRows);
+    const cfg: Config = { ...config, projectsDir: dir };
+    const prev = { [file]: { mtimeMs: NOW - AGE_MS, state: 'ended' as const, stateAtMs: NOW - AGE_MS } };
+    const { files, states } = await gatherEntries(cfg, NOW, prev);
+    // The tail says busy, but the mtime-valid cache says ended → no read happened.
+    expect(files).toEqual([{ session: 'sessOLD', subagent: null, mtimeMs: NOW - AGE_MS, state: 'ended', stateAtMs: NOW - AGE_MS }]);
+    expect(states[file]).toEqual({ mtimeMs: NOW - AGE_MS, state: 'ended', stateAtMs: NOW - AGE_MS });
+  });
+
+  test('a legacy cache entry without state time is reclassified', async () => {
+    const { dir, file } = mkProjects(busyRows);
+    const cfg: Config = { ...config, projectsDir: dir };
+    const legacy = {
+      [file]: { mtimeMs: NOW - AGE_MS, state: 'ended' },
+    } as unknown as Record<string, CachedTailState>;
+
+    const { files, states } = await gatherEntries(cfg, NOW, legacy);
+
+    expect({ file: files[0], cached: states[file] }).toEqual({
+      file: { session: 'sessOLD', subagent: null, mtimeMs: NOW - AGE_MS, state: 'busy', stateAtMs: BUSY_AT_MS },
+      cached: { mtimeMs: NOW - AGE_MS, state: 'busy', stateAtMs: BUSY_AT_MS },
+    });
+  });
+
+  test('cache invalidation: a different cached mtime forces a fresh classification', async () => {
+    const { dir, file } = mkProjects(busyRows);
+    const cfg: Config = { ...config, projectsDir: dir };
+    const prev = { [file]: { mtimeMs: NOW - AGE_MS - 1, state: 'ended' as const, stateAtMs: NOW - AGE_MS - 1 } };
+    const { files } = await gatherEntries(cfg, NOW, prev);
+    expect(files[0]?.state).toBe('busy');
+  });
+
+  test('cached null keeps a classifier-blind file excluded without re-reading it', async () => {
+    const { dir, file } = mkProjects(JSON.stringify({ type: 'result' }) + '\n');
+    const cfg: Config = { ...config, projectsDir: dir };
+    const prev = { [file]: { mtimeMs: NOW - AGE_MS, state: null, stateAtMs: null } };
+    const { files, states } = await gatherEntries(cfg, NOW, prev);
+    expect(files).toEqual([]);
+    expect(states[file]).toEqual({ mtimeMs: NOW - AGE_MS, state: null, stateAtMs: null });
   });
 });
 
@@ -199,10 +378,11 @@ describe('e2e: buildStatusline full render (from a snapshot)', () => {
     expect(actual).toBe(expected);
   });
 
-  test('stale activity (no fresh files) → rate still renders, counts ride down to 0[0] (no blink-out)', async () => {
-    const stale: FileActivity[] = FILES.map((f) => ({ ...f, mtimeMs: NOW - 60_000 }));
+  test('ended turns → rate still renders, counts drop to 0[0] immediately (no blink-out)', async () => {
+    // Freshly-written files whose turns COMPLETED: ended beats mtime freshness.
+    const done: FileActivity[] = FILES.map((f) => ({ ...f, state: 'ended' as const }));
     const { entries } = await gatherEntries(config, NOW);
-    const shared = buildSnapshot(entries, stale, NOW, config, null, ccusageLine);
+    const shared = buildSnapshot(entries, done, NOW, config, null, ccusageLine);
     const actual = buildStatusline({ input, shared, now: NOW, config });
     // The suffix is unconditional: idle shows 0[0] rather than the segment vanishing.
     expect(actual).toContain('⭐️ {163}322t/s 0[0] |');
@@ -295,8 +475,9 @@ describe('e2e: idle', () => {
 
     const { formatSpeed } = await import('../src/format');
     const { countActive } = await import('../src/transcripts');
-    const stale: FileActivity[] = FILES.map((f) => ({ ...f, mtimeMs: NOW }));
-    const counts = countActive(stale, idleNow, config.activeWindowSec * 1000);
+    // Idle on disk means the tails classified 'ended' — never counted, any mtime.
+    const done: FileActivity[] = FILES.map((f) => ({ ...f, mtimeMs: NOW, state: 'ended' as const }));
+    const counts = countActive(done, idleNow, config.activeWindowSec * 1000);
     expect(counts).toEqual({ sessions: 0, subagents: 0 });
     // Suffix is unconditional: fully idle renders 0[0], not an empty suffix.
     expect(formatSpeed({ cur: 0, all: 0 }, counts, config.effectiveRate)).toBe('⭐️ 0t/s 0[0]');

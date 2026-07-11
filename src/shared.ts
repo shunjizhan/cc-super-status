@@ -7,7 +7,7 @@
 
 import { rename, stat } from 'node:fs/promises';
 
-import type { Config, MergedRateLimits, RateLimitWindow, SharedSnapshot, StatuslineInput } from './types';
+import type { CachedTailState, Config, MergedRateLimits, RateLimitWindow, SharedSnapshot, StatuslineInput } from './types';
 import { computeRatesBySession } from './rate';
 import { countActive, gatherEntries } from './transcripts';
 import { maybeSpawnCcusageJob, readCcusageLine } from './ccusage';
@@ -88,7 +88,8 @@ export const mergeRateLimits = (
 /**
  * Assemble the snapshot the leader freezes. Pure: rates (per session) + active counts,
  * plus the already-validated merged limits and ccusage line passed in. `asOf` is the
- * generation clock every reader uses to judge freshness.
+ * generation clock every reader uses to judge freshness. `states` is the walk's
+ * tail-state cache, carried so the next generation can skip unchanged files.
  */
 export const buildSnapshot = (
   entries: Parameters<typeof computeRatesBySession>[0],
@@ -97,6 +98,7 @@ export const buildSnapshot = (
   config: Config,
   limits: MergedRateLimits | null,
   ccusageLine: string | null,
+  states: Record<string, CachedTailState> = {},
 ): SharedSnapshot => {
   const { all, bySession } = computeRatesBySession(entries, now, config.windowSec * 1000);
   const counts = countActive(files, now, config.activeWindowSec * 1000);
@@ -109,6 +111,7 @@ export const buildSnapshot = (
     counts,
     limits,
     ccusage: ccusageLine,
+    states,
   };
 };
 
@@ -180,6 +183,20 @@ const readSnapshot = async (config: Config, now: number): Promise<SharedSnapshot
   }
 };
 
+/**
+ * The previous generation's tail-state cache, read from the snapshot file
+ * REGARDLESS of freshness — each cache entry is self-validating (keyed by the
+ * file's mtime), so even a stale snapshot's cache safely skips unchanged reads.
+ */
+const readPrevStates = async (config: Config): Promise<Record<string, CachedTailState>> => {
+  try {
+    const snap = parseSnapshot(await Bun.file(snapshotPath(config)).text());
+    return snap?.states ?? {};
+  } catch {
+    return {};
+  }
+};
+
 /** Read the machine-wide merged rate-limit windows, or null if none/unreadable. */
 const readLimits = async (): Promise<MergedRateLimits | null> => {
   try {
@@ -233,14 +250,14 @@ export const resolveSnapshot = async (
     await claimLeadership(now);
   }
 
-  const [{ entries, files }, limits, ccusageLine] = await Promise.all([
-    gatherEntries(config, now),
+  const [{ entries, files, states }, limits, ccusageLine] = await Promise.all([
+    readPrevStates(config).then((prev) => gatherEntries(config, now, prev)),
     readLimits(),
     readCcusageLine(now),
   ]);
   if (role === 'leader') await maybeSpawnCcusageJob(rawStdin, now, config);
 
-  const snap = buildSnapshot(entries, files, now, config, limits, ccusageLine);
+  const snap = buildSnapshot(entries, files, now, config, limits, ccusageLine, states);
   if (role === 'leader') await writeSnapshot(snap, config);
   return snap;
 };

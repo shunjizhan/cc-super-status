@@ -105,7 +105,7 @@ describe('buildSnapshot', () => {
     { id: 'a', tok: 120, ts: NOW, session: 'me' },
     { id: 'b', tok: 240, ts: NOW - 1000, session: 'other' },
   ];
-  const files: FileActivity[] = [{ session: 'me', subagent: null, mtimeMs: NOW - 1000 }];
+  const files: FileActivity[] = [{ session: 'me', subagent: null, mtimeMs: NOW - 1000, state: 'busy', stateAtMs: NOW - 1000 }];
   const limits: MergedRateLimits = { five_hour: { used_percentage: 20, resets_at: 999 } };
 
   test('freezes rates, counts, version, cfgKey, asOf, limits, ccusage line', () => {
