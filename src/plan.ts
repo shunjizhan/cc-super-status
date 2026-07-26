@@ -1,10 +1,11 @@
-// Plan tier → ⚡ quota-bar length.
+// Reads of Claude Code's own local account cache, ~/.claude.json.
 //
-// The statusline stdin carries NO plan/subscription field (only rate_limits
-// percentages), so the tier is read from Claude Code's own local account cache:
-// ~/.claude.json → oauthAccount.{organization,user}RateLimitTier, e.g.
-// "default_claude_max_20x". That field is undocumented internal state, so we read it
-// defensively — any failure yields null and the caller keeps the default 20-cell bar.
+// The statusline stdin carries no plan/subscription field and no account identity (only
+// rate_limits percentages), so both come from this file: oauthAccount.{organization,user}
+// RateLimitTier (e.g. "default_claude_max_20x") sets the ⚡ bar's layer count, and
+// oauthAccount.accountUuid scopes the shared rate-limit merge. Both are undocumented
+// internal state, so every read here is defensive — any failure yields null and the caller
+// degrades (the default single-layer bar / one unscoped merge bucket), never throws.
 
 import { readFileSync } from 'node:fs';
 
@@ -56,6 +57,28 @@ export const detectRateLimitTier = (path: string = claudeJsonPath()): string | n
     // simplified: full-file read (~200KB) each tick; cache by mtime if it ever shows up hot.
     const text = readFileSync(path, 'utf8');
     return text.match(/"(?:organization|user)RateLimitTier"\s*:\s*"([^"]+)"/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The signed-in account's uuid (oauthAccount.accountUuid), or null if the file is absent /
+ * unreadable / mid-write or carries no uuid. This is what scopes the machine-wide
+ * rate-limit merge (see `parseStoredLimits` in src/shared.ts): an account switch changes
+ * it, and a merge stamped with a different uuid is discarded rather than ratcheted forward.
+ *
+ * Anchored on the "oauthAccount" key rather than matching the first "accountUuid" in the
+ * file: cachedUsageUtilization carries an accountUuid too, and right after a switch that
+ * copy can still name the PREVIOUS account — the exact reading this scoping exists to
+ * reject. Never throws; a torn read just misses and the merge reseeds from live stdin.
+ */
+export const detectAccountUuid = (path: string = claudeJsonPath()): string | null => {
+  try {
+    const text = readFileSync(path, 'utf8');
+    const account = /"oauthAccount"\s*:\s*\{/.exec(text);
+    if (!account) return null;
+    return text.slice(account.index).match(/"accountUuid"\s*:\s*"([^"]+)"/)?.[1] ?? null;
   } catch {
     return null;
   }

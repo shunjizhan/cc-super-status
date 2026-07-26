@@ -8,7 +8,7 @@
 
 import type { SharedSnapshot, StatuslineInput } from './src/types';
 import { parseConfig } from './src/config';
-import { barScaleForMode, detectRateLimitTier } from './src/plan';
+import { barScaleForMode, detectAccountUuid, detectRateLimitTier } from './src/plan';
 import { resolveSnapshot } from './src/shared';
 import { buildStatusline } from './src/buildStatusline';
 
@@ -28,10 +28,14 @@ const main = async (): Promise<void> => {
   // both. Render-only (cfgKey excludes cells), so this per-pane read never fragments the
   // shared snapshot. See src/plan.ts.
   const config = parseConfig(process.env, barScaleForMode(process.env.CCSS_BAR_MODE, detectRateLimitTier()));
+  // Scopes the shared rate-limit merge (see src/shared.ts): the merge only ratchets
+  // forward, which is right within an account and wrong across a switch, so the stored
+  // merge is stamped with this and discarded when it names someone else.
+  const account = detectAccountUuid();
 
   let shared: SharedSnapshot | undefined;
   try {
-    shared = await resolveSnapshot(config, input, raw, now);
+    shared = await resolveSnapshot(config, input, raw, now, account);
     process.stdout.write(buildStatusline({ input, shared, now, config }));
   } catch {
     process.stdout.write(shared?.ccusage ?? '');

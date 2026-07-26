@@ -66,6 +66,19 @@ export interface MergedRateLimits {
   seven_day?: RateLimitWindow;
 }
 
+/**
+ * On-disk shape of `ccss-limits.json` — the merged windows plus the account they belong
+ * to. The merge is monotone (used% only rises, resets_at only moves forward), which is
+ * correct only WITHIN one account; across an account switch the previous account's
+ * reading would win forever. `account` (oauthAccount.accountUuid, null for an API-key
+ * user or an unreadable ~/.claude.json) scopes it: a stored merge whose stamp doesn't
+ * match the signed-in account is discarded, not merged. Never reaches the snapshot or
+ * the render — `parseStoredLimits` strips it back to MergedRateLimits.
+ */
+export interface StoredLimits extends MergedRateLimits {
+  account?: string | null;
+}
+
 /** One deduped token event from a transcript line (a single assistant message). */
 export interface TokenEntry {
   /** message.id (fallback: the raw timestamp string) — the dedup key. */

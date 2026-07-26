@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
-import { barScaleForMode, detectRateLimitTier, planBarScale } from '../src/plan';
+import { barScaleForMode, detectAccountUuid, detectRateLimitTier, planBarScale } from '../src/plan';
 
 describe('planBarScale', () => {
   test('Max 20x → 4× the bar (20/5)', () => {
@@ -105,5 +105,64 @@ describe('detectRateLimitTier (scratch fixture)', () => {
   test('a torn / partial write → null (the regex just misses, never throws)', async () => {
     const p = await write('partial.json', '{"oauthAccount":{"organizationRateLimitTier":"default_cla');
     expect(detectRateLimitTier(p)).toBeNull();
+  });
+});
+
+describe('detectAccountUuid (scratch fixture)', () => {
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(`${tmpdir()}/ccss-acct-`);
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const write = async (name: string, body: string): Promise<string> => {
+    const p = `${dir}/${name}`;
+    await writeFile(p, body);
+    return p;
+  };
+
+  test('reads oauthAccount.accountUuid from a real-shaped file', async () => {
+    const p = await write(
+      'acct.json',
+      JSON.stringify({
+        oauthAccount: {
+          accountUuid: 'aaaa-1111',
+          emailAddress: 'a@b.c',
+          organizationRateLimitTier: 'default_claude_max_20x',
+        },
+      }),
+    );
+    expect(detectAccountUuid(p)).toBe('aaaa-1111');
+  });
+
+  test('anchors on oauthAccount rather than the first accountUuid in the file', async () => {
+    // cachedUsageUtilization carries its own accountUuid and can still name the PREVIOUS
+    // account right after a switch — precisely the reading the scoping exists to reject.
+    const p = await write(
+      'anchored.json',
+      JSON.stringify({
+        cachedUsageUtilization: { accountUuid: 'old-account', utilization: {} },
+        oauthAccount: { accountUuid: 'new-account' },
+      }),
+    );
+    expect(detectAccountUuid(p)).toBe('new-account');
+  });
+
+  test('a missing file → null (no throw)', () => {
+    expect(detectAccountUuid(`${dir}/does-not-exist.json`)).toBeNull();
+  });
+
+  test('no oauthAccount, or an oauthAccount without a uuid → null', async () => {
+    expect(detectAccountUuid(await write('noacct.json', JSON.stringify({ projects: {} })))).toBeNull();
+    const p = await write('nouuid.json', JSON.stringify({ oauthAccount: { emailAddress: 'a@b.c' } }));
+    expect(detectAccountUuid(p)).toBeNull();
+  });
+
+  test('a torn / partial write → null (the regex just misses, never throws)', async () => {
+    const p = await write('partial-acct.json', '{"oauthAccount":{"accountUuid":"aaaa-11');
+    expect(detectAccountUuid(p)).toBeNull();
   });
 });
