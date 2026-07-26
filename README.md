@@ -140,6 +140,8 @@ sequenceDiagram
 
 The job is **never killed and never piped** — it writes to a file and renames it into place, so every recompute that starts also lands. A fresh job-marker file rate-limits spawning: at most one recompute exists machine-wide, regardless of how many sessions are open.
 
+The rate-limit merge that feeds ⚡ is **per-account**. The merge only ever ratchets forward — that is what stops an idle pane from dragging the shared bars backward — so an account switch would otherwise leave you looking at the previous account's near-empty bar until its windows expired. Two things prevent it: `ccss-limits.json` records which account contributed it and is discarded when you sign in as someone else, and a window is only allowed to roll forward to a later reset once the current one has actually expired. The second matters because panes already open when you switch keep reporting the old account's numbers until they next hit the API, so the stored merge alone can be re-poisoned within a tick.
+
 Render *timing* stays per-pane (Claude Code repaints each pane on its own events), but all ticks inside one 5-second generation read the same frozen snapshot, so the numbers agree everywhere. The worst two panes can disagree by is adjacent generations of one monotone stream — which reads as "updating", not "broken". The 30s data rides the 5s loop: the leader copies the current ccusage line into every snapshot, so new dollars appear in all panes at the same generation boundary.
 
 ## Environment overrides
@@ -204,7 +206,7 @@ bun test      # runs the unit + deterministic e2e suite
 - `src/format.ts` — pure rendering helpers (model, speed, bar, truecolor, quota).
 - `src/transcripts.ts` — `gatherEntries` reads transcripts off disk into token events + per-file activity; `countActive` (pure) turns that activity into the live session/sub-agent counts.
 - `src/ccusage.ts` — parses `ccusage statusline` output; `maybeSpawnCcusageJob` runs the detached recompute; `readCcusageLine` serves the shared line.
-- `src/shared.ts` — leader election + the `SharedSnapshot` every pane reads (`resolveSnapshot`); pure `mergeRateLimits` / `decideRole` / `buildSnapshot`.
+- `src/shared.ts` — leader election + the `SharedSnapshot` every pane reads (`resolveSnapshot`); pure `mergeRateLimits` / `parseStoredLimits` / `decideRole` / `buildSnapshot`.
 - `src/buildStatusline.ts` — pure orchestrator composing the final line from a snapshot + stdin.
 - `statusline.ts` — the impure entry point Claude Code runs.
 - `test/` — unit tests per module plus a fixture-driven `e2e.test.ts`.

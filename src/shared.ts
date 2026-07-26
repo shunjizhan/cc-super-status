@@ -7,7 +7,7 @@
 
 import { rename, stat } from 'node:fs/promises';
 
-import type { CachedTailState, Config, MergedRateLimits, RateLimitWindow, SharedSnapshot, StatuslineInput } from './types';
+import type { CachedTailState, Config, MergedRateLimits, RateLimitWindow, SharedSnapshot, StatuslineInput, StoredLimits } from './types';
 import { computeRatesBySession } from './rate';
 import { countActive, gatherEntries } from './transcripts';
 import { maybeSpawnCcusageJob, readCcusageLine } from './ccusage';
@@ -54,17 +54,38 @@ export const decideRole = (
   ttlMs: number,
 ): 'leader' | 'follower' => (claimMtimeMs === null || now - claimMtimeMs >= ttlMs ? 'leader' : 'follower');
 
-/** Merge two rate-limit windows to the fresher reading: later resets_at wins; tie → higher used%. */
+/**
+ * Merge two rate-limit windows to the fresher reading. Equal resets_at → higher used% (the
+ * more advanced reading of the same window). Different resets_at → the later one wins ONLY
+ * once the earlier has actually expired, because that is the only way a window rolls
+ * forward; before then, a reading claiming a *different* future window did not come from
+ * this account's current window at all, and the still-current one wins.
+ *
+ * That expiry condition is what stops a pane left signed in to a previous account from
+ * re-pinning the shared bars. Claude Code fills stdin `rate_limits` from a process-local
+ * variable it only refreshes from API response headers, so a pane that has made no request
+ * since someone switched accounts keeps shipping the OLD account's window — with its own,
+ * typically later, resets_at — on every tick. Scoping the stored file by account (see
+ * `parseStoredLimits`) evicts that account's *stored* merge but cannot filter its live
+ * contributions; this does.
+ */
 const mergeWindow = (
   x: RateLimitWindow | undefined,
   y: RateLimitWindow | undefined,
+  now: number,
 ): RateLimitWindow | undefined => {
   if (!x) return y;
   if (!y) return x;
   const rx = x.resets_at ?? -Infinity;
   const ry = y.resets_at ?? -Infinity;
-  if (rx > ry) return x;
-  if (ry > rx) return y;
+  if (rx !== ry) {
+    // resets_at is epoch SECONDS; `now` is epoch ms. A window with no resets_at counts as
+    // long expired, so a reading that carries one always beats one that doesn't.
+    const earlierExpired = Math.min(rx, ry) * 1000 <= now;
+    const later = rx > ry ? x : y;
+    const earlier = rx > ry ? y : x;
+    return earlierExpired ? later : earlier;
+  }
   // Same window (equal reset) → the higher used% is the more advanced (monotone) reading.
   return (x.used_percentage ?? -Infinity) >= (y.used_percentage ?? -Infinity) ? x : y;
 };
@@ -72,17 +93,71 @@ const mergeWindow = (
 /**
  * Merge rate-limit views across sessions. An idle session's stale reading can't drag
  * the shared bars back: within a window used% only rises (higher wins), and a window
- * rollover pushes resets_at forward (later wins), so the merge tracks the true account
- * state as the leading session sees it. Returns null when neither side has any window.
+ * rollover pushes resets_at forward once the old window expires, so the merge tracks the
+ * true account state as the leading session sees it. Returns null when neither side has
+ * any window.
+ *
+ * An account switch defeats that ratchet on both branches at once, and needs BOTH halves of
+ * the defence: `parseStoredLimits` evicts the previous account's stored merge, and
+ * `mergeWindow`'s expiry condition rejects its still-live contributions from panes left
+ * signed in to it. Scoping alone is not enough — the stored file can be re-poisoned under
+ * the new stamp within one tick.
  */
 export const mergeRateLimits = (
   a: MergedRateLimits | null | undefined,
   b: MergedRateLimits | null | undefined,
+  now: number,
 ): MergedRateLimits | null => {
-  const five_hour = mergeWindow(a?.five_hour, b?.five_hour);
-  const seven_day = mergeWindow(a?.seven_day, b?.seven_day);
+  const five_hour = mergeWindow(a?.five_hour, b?.five_hour, now);
+  const seven_day = mergeWindow(a?.seven_day, b?.seven_day, now);
   if (!five_hour && !seven_day) return null;
   return { ...(five_hour && { five_hour }), ...(seven_day && { seven_day }) };
+};
+
+/**
+ * Parse + validate the stored merge (`ccss-limits.json`) as this account's. Returns null on
+ * bad JSON, a stamp naming a different account, or no usable window — in every case the
+ * caller reseeds from live stdin instead of inheriting the stored windows. Reuses
+ * `mergeRateLimits` as the shape-tolerant validator, which also strips `account` back off,
+ * so the account never reaches the snapshot or the render. Pure.
+ *
+ * Both merge branches leak across a switch (five_hour via later-resets_at, seven_day via the
+ * equal-resets_at used% tie) and the stored file carries nothing else that could tell a stale
+ * contributor from a new account, so eviction has to be by identity. This is only half the
+ * defence — it clears the previous account's *stored* merge, while `mergeWindow`'s expiry
+ * condition is what keeps that account's live contributors from writing it straight back.
+ *
+ * A missing stamp normalises to null, so a legacy file is invalidated exactly once for any
+ * real account, while a null account (API-key user, or an unreadable ~/.claude.json) reads a
+ * coherent bucket of its own rather than inheriting a subscriber's quota.
+ */
+export const parseStoredLimits = (
+  text: string,
+  account: string | null,
+  now: number,
+): MergedRateLimits | null => {
+  try {
+    const o = JSON.parse(text) as StoredLimits;
+    if (!o || typeof o !== 'object') return null;
+    if ((o.account ?? null) !== account) return null;
+    return mergeRateLimits(o, null, now);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The account stamp on the stored merge, or null when the file is unparseable or unstamped.
+ * Used only to refuse an overwrite: a tick that cannot identify itself must not replace a
+ * bucket that names a real account (see `contributeLimits`). Pure.
+ */
+export const storedLimitsAccount = (text: string): string | null => {
+  try {
+    const o = JSON.parse(text) as StoredLimits;
+    return (o && typeof o === 'object' ? o.account : null) ?? null;
+  } catch {
+    return null;
+  }
 };
 
 /**
@@ -197,34 +272,58 @@ const readPrevStates = async (config: Config): Promise<Record<string, CachedTail
   }
 };
 
-/** Read the machine-wide merged rate-limit windows, or null if none/unreadable. */
-const readLimits = async (): Promise<MergedRateLimits | null> => {
+/** Raw contents of the shared limits file, or null if absent / unreadable. */
+const readLimitsText = async (): Promise<string | null> => {
   try {
-    const o = JSON.parse(await Bun.file(limitsPath()).text()) as MergedRateLimits;
-    return mergeRateLimits(o, null); // reuse the shape-tolerant merge as a validator
+    return await Bun.file(limitsPath()).text();
   } catch {
     return null;
   }
 };
 
 /**
- * Fold this session's stdin rate-limit view into the shared merge (monotone, so a
- * stale contributor never regresses it). Skips the write when nothing changes, to
- * avoid rename churn across many panes each tick. Best-effort.
+ * Read the machine-wide merged rate-limit windows for `account`, or null if the file is
+ * absent / unreadable / holds another account's merge (see `parseStoredLimits`).
  */
-const contributeLimits = async (mine: MergedRateLimits | null | undefined): Promise<void> => {
+const readLimits = async (account: string | null, now: number): Promise<MergedRateLimits | null> => {
+  const text = await readLimitsText();
+  return text === null ? null : parseStoredLimits(text, account, now);
+};
+
+/**
+ * Fold this session's stdin rate-limit view into the shared merge (monotone, so a
+ * stale contributor never regresses it) and stamp it with the signed-in account, so the
+ * next reader can tell whose ratchet it is. Skips the write when nothing changes, to
+ * avoid rename churn across many panes each tick — a foreign stored merge reads as null,
+ * so the first tick after a switch always differs and reseeds. Best-effort.
+ *
+ * A tick that could not read an account leaves a stamped bucket alone entirely. Without an
+ * identity it cannot tell "my account" from "someone else's", and since one file holds one
+ * bucket, writing a null stamp would evict a real account's accumulated cross-pane maximum
+ * on the strength of a single pane's view — the backward jump the ratchet exists to prevent.
+ */
+const contributeLimits = async (
+  mine: MergedRateLimits | null | undefined,
+  account: string | null,
+  now: number,
+): Promise<void> => {
   if (!mine || (!mine.five_hour && !mine.seven_day)) return; // API-key user / no data → nothing to add
-  const current = await readLimits();
-  const merged = mergeRateLimits(current, mine);
+  const text = await readLimitsText();
+  if (account === null && text !== null && storedLimitsAccount(text) !== null) return;
+
+  const current = text === null ? null : parseStoredLimits(text, account, now);
+  const merged = mergeRateLimits(current, mine, now);
   if (merged && JSON.stringify(merged) !== JSON.stringify(current)) {
-    await atomicWrite(limitsPath(), JSON.stringify(merged));
+    await atomicWrite(limitsPath(), JSON.stringify({ account, ...merged }));
   }
 };
 
 /**
  * Resolve the SharedSnapshot this tick renders from, doing the least work its role
  * allows:
- *   - every tick contributes its own rate-limit view to the shared merge;
+ *   - every tick contributes its own rate-limit view to the shared merge, scoped to
+ *     `account` (the signed-in oauthAccount.accountUuid) so a switch resets the ⚡ bars
+ *     instead of inheriting the previous account's ratchet;
  *   - the leader walks transcripts, reads the merged limits + ccusage line, spawns the
  *     ccusage recompute if the line is stale, freezes a fresh snapshot, and writes it;
  *   - a follower reads the frozen snapshot (no walk) — a session simply absent from
@@ -237,8 +336,9 @@ export const resolveSnapshot = async (
   input: StatuslineInput,
   rawStdin: string,
   now: number,
+  account: string | null,
 ): Promise<SharedSnapshot> => {
-  await contributeLimits(input.rate_limits);
+  await contributeLimits(input.rate_limits, account, now);
 
   const role = decideRole(await statMtime(claimPath()), now, LEASE_MS);
 
@@ -252,7 +352,7 @@ export const resolveSnapshot = async (
 
   const [{ entries, files, states }, limits, ccusageLine] = await Promise.all([
     readPrevStates(config).then((prev) => gatherEntries(config, now, prev)),
-    readLimits(),
+    readLimits(account, now),
     readCcusageLine(now),
   ]);
   if (role === 'leader') await maybeSpawnCcusageJob(rawStdin, now, config);
